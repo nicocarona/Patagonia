@@ -1,0 +1,178 @@
+const http = require("http");
+const { openDatabase } = require("./db");
+const { seed } = require("./seed");
+const { requireAuth } = require("./auth");
+const {
+  upsertCrewMember,
+  addLicense,
+  addMedicalCertificate,
+  upsertTypeRating,
+  addSpecialQualification,
+  addRecurrentTraining,
+  getCrewCurrencyProfile,
+  getFleetCurrencyDashboard,
+  checkPilotCurrency,
+} = require("./trainingEngine");
+
+const PORT = process.env.PORT || 3010;
+const DB_FILE = process.env.DATABASE_URL ? undefined : process.env.SQLITE_FILE || ":memory:";
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body, null, 2));
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => (data += chunk));
+    req.on("end", () => {
+      if (!data) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch (err) {
+        reject(new Error("JSON inválido en el cuerpo de la solicitud."));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function start() {
+  const db = await openDatabase(DB_FILE);
+  if (process.env.SEED === "1") await seed(db);
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, module: "fleet-training-module" } }) },
+
+    {
+      method: "GET",
+      pattern: /^\/currency$/,
+      roles: null,
+      handler: async () => ({ status: 200, body: await getFleetCurrencyDashboard(db) }),
+    },
+    {
+      method: "GET",
+      pattern: /^\/currency\/([^/]+)$/,
+      roles: null,
+      handler: async (req, url, match) => {
+        const profile = await getCrewCurrencyProfile(db, match[1]);
+        if (!profile) return { status: 404, body: { error: "Tripulante no encontrado." } };
+        return { status: 200, body: profile };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/currency\/([^/]+)\/([^/]+)$/,
+      roles: null,
+      handler: async (req, url, match) => {
+        const result = await checkPilotCurrency(db, { employeeCode: match[1], aircraftModel: decodeURIComponent(match[2]) });
+        return { status: 200, body: result };
+      },
+    },
+
+    {
+      method: "POST",
+      pattern: /^\/crew$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        return { status: 201, body: await upsertCrewMember(db, body) };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/licenses$/,
+      roles: ["admin", "crew"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await addLicense(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/medical-certificates$/,
+      roles: ["admin", "crew"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await addMedicalCertificate(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/type-ratings$/,
+      roles: ["admin", "crew"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await upsertTypeRating(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/special-qualifications$/,
+      roles: ["admin", "crew"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await addSpecialQualification(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/recurrent-trainings$/,
+      roles: ["admin", "crew"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await addRecurrentTraining(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`fleet-training-module escuchando en http://localhost:${PORT} (motor: ${db.engine})`);
+  });
+}
+
+start().catch((err) => {
+  console.error("Error al iniciar fleet-training-module:", err);
+  process.exit(1);
+});

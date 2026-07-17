@@ -1,0 +1,138 @@
+const http = require("http");
+const { openDatabase } = require("./db");
+const { seed } = require("./seed");
+const { requireAuth } = require("./auth");
+const {
+  createSupplier,
+  ensureTank,
+  recordDelivery,
+  recordUplift,
+  getFuelDashboard,
+  getCostByAircraft,
+  getSuppliers,
+} = require("./fuelEngine");
+
+const PORT = process.env.PORT || 3011;
+const DB_FILE = process.env.DATABASE_URL ? undefined : process.env.SQLITE_FILE || ":memory:";
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body, null, 2));
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => (data += chunk));
+    req.on("end", () => {
+      if (!data) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch (err) {
+        reject(new Error("JSON inválido en el cuerpo de la solicitud."));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function start() {
+  const db = await openDatabase(DB_FILE);
+  if (process.env.SEED === "1") await seed(db);
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, module: "fleet-fuel-module" } }) },
+
+    { method: "GET", pattern: /^\/dashboard$/, roles: null, handler: async () => ({ status: 200, body: await getFuelDashboard(db) }) },
+    {
+      method: "GET",
+      pattern: /^\/cost-by-aircraft$/,
+      roles: null,
+      handler: async (req, url) => ({ status: 200, body: await getCostByAircraft(db, { since: url.searchParams.get("since") || undefined }) }),
+    },
+    { method: "GET", pattern: /^\/suppliers$/, roles: null, handler: async () => ({ status: 200, body: await getSuppliers(db) }) },
+    {
+      method: "POST",
+      pattern: /^\/suppliers$/,
+      roles: ["admin", "finance"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await createSupplier(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/tanks$/,
+      roles: ["admin", "finance", "integration"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await ensureTank(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/deliveries$/,
+      roles: ["admin", "finance"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await recordDelivery(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      // También usado por fleet-integration (rol 'integration') para
+      // registrar el consumo real de un vuelo cerrado en fleet-dispatch-module.
+      method: "POST",
+      pattern: /^\/uplifts$/,
+      roles: ["admin", "ops", "integration"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await recordUplift(db, body) };
+        } catch (err) {
+          return { status: 409, body: { error: err.message } };
+        }
+      },
+    },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`fleet-fuel-module escuchando en http://localhost:${PORT} (motor: ${db.engine})`);
+  });
+}
+
+start().catch((err) => {
+  console.error("Error al iniciar fleet-fuel-module:", err);
+  process.exit(1);
+});

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #f7f6f2; color: #232220;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 20px; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: #6b6a65; font-size: 13px; margin: 0 0 20px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .card { background: #fff; border: 0.5px solid #ddd; border-radius: 12px; padding: 16px; }
+  .card h3 { margin: 0 0 10px; font-size: 15px; font-weight: 500; }
+  .aircraft-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 500; }
+  .badge.ok { background: #EAF3DE; color: #27500A; }
+  .badge.bad { background: #FCEBEB; color: #501313; }
+  .comp-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 0.5px solid #eee; font-size: 13px; }
+  .comp-row:first-of-type { border-top: none; }
+  .marker { width: 18px; text-align: center; flex-shrink: 0; }
+  .comp-name { flex: 1; }
+  .comp-remaining { color: #6b6a65; font-size: 12px; white-space: nowrap; }
+  .status-ok { color: #27500A; }
+  .status-due { color: #633806; }
+  .status-over { color: #791F1F; }
+  section { background: #fff; border: 0.5px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  section h2 { font-size: 15px; font-weight: 500; margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: #6b6a65; margin-bottom: 4px; }
+  input, select, button, textarea {
+    font-family: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px;
+    border: 0.5px solid #ccc; background: #fff; width: 100%;
+  }
+  button { cursor: pointer; font-weight: 500; border-color: #999; }
+  button:hover { background: #f2f1ec; }
+  button.primary { background: #232220; color: #fff; border-color: #232220; }
+  button.primary:hover { background: #3a3936; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .result-box { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px; display: none; }
+  .result-box.ok { background: #EAF3DE; color: #173404; display: block; }
+  .result-box.fail { background: #FCEBEB; color: #4A1B0C; display: block; }
+  .result-box ul { margin: 6px 0 0; padding-left: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 4px; border-top: 0.5px solid #eee; }
+  th { color: #6b6a65; font-weight: 500; font-size: 12px; }
+  .wo-status { font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+  .wo-open { background: #FAEEDA; color: #412402; }
+  .wo-closed { background: #EAF3DE; color: #173404; }
+  .small-btn { width: auto; padding: 4px 10px; font-size: 12px; }
+  .reset-link { font-size: 12px; color: #8a8a85; text-decoration: underline; cursor: pointer; background: none; border: none; width: auto; padding: 0; }
+</style>
+</head>
+<body>
+<h2 class="sr-only">Panel interactivo del módulo de mantenimiento por componente: dashboard de flota, registro de vuelos con bloqueo por límites, y órdenes de trabajo.</h2>
+
+<h1>Mantenimiento por componente</h1>
+<p class="sub">Demo interactiva — los datos se guardan en este navegador (localStorage), sin conexión a un servidor.</p>
+
+<div id="dashboard" class="grid"></div>
+
+<section>
+  <h2>Registrar vuelo</h2>
+  <div class="row">
+    <div>
+      <label>Aeronave</label>
+      <select id="flAircraft"></select>
+    </div>
+    <div>
+      <label>Fecha</label>
+      <input type="date" id="flDate" />
+    </div>
+    <div>
+      <label>Horas Hobbs</label>
+      <input type="number" id="flHours" step="0.1" min="0" value="5" />
+    </div>
+    <div>
+      <label>Ciclos</label>
+      <input type="number" id="flCycles" step="1" min="1" value="1" />
+    </div>
+  </div>
+  <button class="primary" onclick="tryLogFlight()">Verificar y registrar vuelo</button>
+  <div id="flightResult" class="result-box"></div>
+</section>
+
+<section>
+  <h2>Órdenes de trabajo</h2>
+  <div class="row">
+    <div>
+      <label>Aeronave</label>
+      <select id="woAircraft" onchange="refreshWoComponentOptions()"></select>
+    </div>
+    <div>
+      <label>Componente (opcional)</label>
+      <select id="woComponent"></select>
+    </div>
+    <div>
+      <label>Tipo</label>
+      <select id="woType">
+        <option value="repair">Reparación</option>
+        <option value="inspection">Inspección</option>
+        <option value="overhaul">Overhaul</option>
+        <option value="replacement">Reemplazo</option>
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <div style="grid-column: 1 / -1;">
+      <label>Descripción</label>
+      <input type="text" id="woDesc" placeholder="Ej: Overhaul de caja de transmisión por vida límite" />
+    </div>
+  </div>
+  <button class="primary" onclick="createWO()">Abrir orden de trabajo</button>
+
+  <table style="margin-top: 14px;">
+    <thead><tr><th>#</th><th>Aeronave</th><th>Descripción</th><th>Tipo</th><th>Estado</th><th></th></tr></thead>
+    <tbody id="woTableBody"></tbody>
+  </table>
+</section>
+
+<button class="reset-link" onclick="resetAll()">Restablecer datos de ejemplo</button>
+
+<script>
+const STORE_KEY = "fleet_maintenance_demo_v1";
+const DUE_SOON_HOURS = 25, DUE_SOON_CYCLES = 50, DUE_SOON_DAYS = 30;
+
+function todayIso() { return new Date().toISOString().slice(0, 10); }
+function daysBetween(fromIso, toIso) {
+  const from = new Date(fromIso + "T00:00:00Z").getTime();
+  const to = new Date(toIso + "T00:00:00Z").getTime();
+  return Math.round((to - from) / (1000 * 60 * 60 * 24));
+}
+
+function defaultData() {
+  return {
+    nextIds: { aircraft: 3, component: 7, wo: 1 },
+    aircraft: [
+      { id: 1, tail_number: "XA-HEL1", model: "Airbus H125", total_hours: 4281.2, total_cycles: 8120 },
+      { id: 2, tail_number: "XA-HEL2", model: "Airbus H145", total_hours: 2103.7, total_cycles: 3980 },
+    ],
+    components: [
+      { id: 1, aircraft_id: 1, name: "Pala de rotor principal #1", hours_limit: 2200, cycles_limit: null, calendar_limit_date: null, hours_accumulated: 1850, cycles_accumulated: 0, status: "installed" },
+      { id: 2, aircraft_id: 1, name: "Caja de transmisión principal", hours_limit: 3000, cycles_limit: null, calendar_limit_date: null, hours_accumulated: 2985, cycles_accumulated: 0, status: "installed" },
+      { id: 3, aircraft_id: 1, name: "Eje de transmisión de cola", hours_limit: 2500, cycles_limit: null, calendar_limit_date: null, hours_accumulated: 2510, cycles_accumulated: 0, status: "installed" },
+      { id: 4, aircraft_id: 1, name: "Kit de flotación de emergencia", hours_limit: null, cycles_limit: null, calendar_limit_date: "2026-08-01", hours_accumulated: 0, cycles_accumulated: 0, status: "installed" },
+      { id: 5, aircraft_id: 2, name: "Pala de rotor principal #1", hours_limit: 2200, cycles_limit: null, calendar_limit_date: null, hours_accumulated: 640, cycles_accumulated: 0, status: "installed" },
+      { id: 6, aircraft_id: 2, name: "Tren de aterrizaje", hours_limit: null, cycles_limit: 5000, calendar_limit_date: null, hours_accumulated: 0, cycles_accumulated: 3980, status: "installed" },
+    ],
+    workOrders: [],
+  };
+}
+
+function loadData() {
+  const raw = localStorage.getItem(STORE_KEY);
+  if (!raw) { const d = defaultData(); saveData(d); return d; }
+  try { return JSON.parse(raw); } catch (e) { const d = defaultData(); saveData(d); return d; }
+}
+function saveData(d) { localStorage.setItem(STORE_KEY, JSON.stringify(d)); }
+function resetAll() { localStorage.removeItem(STORE_KEY); location.reload(); }
+
+let DATA = loadData();
+
+function computeComponentStatus(c, asOfDate) {
+  const remaining = {};
+  let worst = "ok";
+  if (c.hours_limit != null) {
+    remaining.hours = Math.round((c.hours_limit - c.hours_accumulated) * 10) / 10;
+    if (remaining.hours <= 0) worst = "overdue";
+    else if (remaining.hours <= DUE_SOON_HOURS && worst !== "overdue") worst = "due_soon";
+  }
+  if (c.cycles_limit != null) {
+    remaining.cycles = c.cycles_limit - c.cycles_accumulated;
+    if (remaining.cycles <= 0) worst = "overdue";
+    else if (remaining.cycles <= DUE_SOON_CYCLES && worst !== "overdue") worst = "due_soon";
+  }
+  if (c.calendar_limit_date != null) {
+    remaining.calendarDays = daysBetween(asOfDate, c.calendar_limit_date);
+    if (remaining.calendarDays <= 0) worst = "overdue";
+    else if (remaining.calendarDays <= DUE_SOON_DAYS && worst !== "overdue") worst = "due_soon";
+  }
+  return { ...c, remaining, lifeStatus: worst };
+}
+
+function checkFlightAgainstLimits({ aircraftId, plannedHours, plannedCycles, asOfDate }) {
+  const components = DATA.components.filter((c) => c.aircraft_id === aircraftId && c.status === "installed");
+  const violations = [];
+  for (const c of components) {
+    if (c.hours_limit != null) {
+      const projected = c.hours_accumulated + plannedHours;
+      if (projected > c.hours_limit) violations.push(`${c.name}: excedería su límite de horas (${projected.toFixed(1)}h > ${c.hours_limit}h límite).`);
+    }
+    if (c.cycles_limit != null) {
+      const projected = c.cycles_accumulated + plannedCycles;
+      if (projected > c.cycles_limit) violations.push(`${c.name}: excedería su límite de ciclos (${projected} > ${c.cycles_limit} límite).`);
+    }
+    if (c.calendar_limit_date != null && asOfDate > c.calendar_limit_date) {
+      violations.push(`${c.name}: su límite calendario (${c.calendar_limit_date}) ya venció.`);
+    }
+  }
+  return violations.length === 0 ? { ok: true } : { ok: false, violations };
+}
+
+function logFlight({ aircraftId, flightDate, hobbsHours, cycles }) {
+  const check = checkFlightAgainstLimits({ aircraftId, plannedHours: hobbsHours, plannedCycles: cycles, asOfDate: flightDate });
+  if (!check.ok) return check;
+  const aircraft = DATA.aircraft.find((a) => a.id === aircraftId);
+  aircraft.total_hours += hobbsHours;
+  aircraft.total_cycles += cycles;
+  for (const c of DATA.components) {
+    if (c.aircraft_id === aircraftId && c.status === "installed") {
+      c.hours_accumulated += hobbsHours;
+      c.cycles_accumulated += cycles;
+    }
+  }
+  saveData(DATA);
+  return { ok: true };
+}
+
+function resetComponentLife(componentId, resetDate) {
+  const c = DATA.components.find((x) => x.id === componentId);
+  if (!c) return;
+  c.hours_accumulated = 0;
+  c.cycles_accumulated = 0;
+}
+
+function closeWorkOrder(woId, closedDate) {
+  const wo = DATA.workOrders.find((w) => w.id === woId);
+  if (!wo) return;
+  wo.status = "closed";
+  wo.closed_date = closedDate;
+  if ((wo.action_type === "overhaul" || wo.action_type === "replacement") && wo.component_id) {
+    resetComponentLife(wo.component_id, closedDate);
+  }
+  saveData(DATA);
+}
+
+function renderDashboard() {
+  const el = document.getElementById("dashboard");
+  el.innerHTML = "";
+  const asOf = todayIso();
+  for (const aircraft of DATA.aircraft) {
+    const comps = DATA.components.filter((c) => c.aircraft_id === aircraft.id && c.status === "installed").map((c) => computeComponentStatus(c, asOf));
+    const airworthy = !comps.some((c) => c.lifeStatus === "overdue");
+    const card = document.createElement("div");
+    card.className = "card";
+    const compsHtml = comps.map((c) => {
+      const bits = [];
+      if (c.remaining.hours != null) bits.push(`${c.remaining.hours}h`);
+      if (c.remaining.cycles != null) bits.push(`${c.remaining.cycles} ciclos`);
+      if (c.remaining.calendarDays != null) bits.push(`${c.remaining.calendarDays} días`);
+      const marker = c.lifeStatus === "overdue" ? "✘" : c.lifeStatus === "due_soon" ? "⚠" : "✔";
+      const cls = c.lifeStatus === "overdue" ? "status-over" : c.lifeStatus === "due_soon" ? "status-due" : "status-ok";
+      return `<div class="comp-row"><span class="marker ${cls}">${marker}</span><span class="comp-name">${c.name}</span><span class="comp-remaining">${bits.join(", ")}</span></div>`;
+    }).join("");
+    card.innerHTML = `
+      <div class="aircraft-title">
+        <h3>${aircraft.tail_number} <span style="color:#6b6a65;font-weight:400;">(${aircraft.model})</span></h3>
+        <span class="badge ${airworthy ? "ok" : "bad"}">${airworthy ? "Aeronavegable" : "No aeronavegable"}</span>
+      </div>
+      <div style="font-size:12px;color:#6b6a65;margin-bottom:8px;">${aircraft.total_hours.toFixed(1)}h totales</div>
+      ${compsHtml}
+    `;
+    el.appendChild(card);
+  }
+}
+
+function refreshAircraftSelects() {
+  const opts = DATA.aircraft.map((a) => `<option value="${a.id}">${a.tail_number} (${a.model})</option>`).join("");
+  document.getElementById("flAircraft").innerHTML = opts;
+  document.getElementById("woAircraft").innerHTML = opts;
+  refreshWoComponentOptions();
+}
+
+function refreshWoComponentOptions() {
+  const aircraftId = Number(document.getElementById("woAircraft").value);
+  const comps = DATA.components.filter((c) => c.aircraft_id === aircraftId && c.status === "installed");
+  document.getElementById("woComponent").innerHTML =
+    `<option value="">(sin componente específico)</option>` +
+    comps.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
+}
+
+function tryLogFlight() {
+  const aircraftId = Number(document.getElementById("flAircraft").value);
+  const flightDate = document.getElementById("flDate").value || todayIso();
+  const hobbsHours = Number(document.getElementById("flHours").value);
+  const cycles = Number(document.getElementById("flCycles").value) || 1;
+  const box = document.getElementById("flightResult");
+
+  const result = logFlight({ aircraftId, flightDate, hobbsHours, cycles });
+  if (result.ok) {
+    box.className = "result-box ok";
+    box.innerHTML = `Vuelo registrado correctamente.`;
+    renderDashboard();
+    refreshWoComponentOptions();
+  } else {
+    box.className = "result-box fail";
+    box.innerHTML = `No se puede registrar el vuelo — excede límites de componente:<ul>${result.violations.map((v) => `<li>${v}</li>`).join("")}</ul>`;
+  }
+}
+
+function createWO() {
+  const aircraftId = Number(document.getElementById("woAircraft").value);
+  const componentId = document.getElementById("woComponent").value ? Number(document.getElementById("woComponent").value) : null;
+  const actionType = document.getElementById("woType").value;
+  const description = document.getElementById("woDesc").value.trim();
+  if (!description) { alert("Ingresa una descripción."); return; }
+  const wo = {
+    id: DATA.nextIds.wo++,
+    aircraft_id: aircraftId,
+    component_id: componentId,
+    description,
+    action_type: actionType,
+    status: "open",
+    opened_date: todayIso(),
+    closed_date: null,
+  };
+  DATA.workOrders.unshift(wo);
+  saveData(DATA);
+  document.getElementById("woDesc").value = "";
+  renderWorkOrders();
+}
+
+function renderWorkOrders() {
+  const tbody = document.getElementById("woTableBody");
+  if (DATA.workOrders.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" style="color:#6b6a65;">Sin órdenes de trabajo todavía.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = DATA.workOrders.map((wo) => {
+    const aircraft = DATA.aircraft.find((a) => a.id === wo.aircraft_id);
+    const typeLabels = { repair: "Reparación", inspection: "Inspección", overhaul: "Overhaul", replacement: "Reemplazo" };
+    const actionBtn = wo.status === "open"
+      ? `<button class="small-btn" onclick="closeWO(${wo.id})">Cerrar</button>`
+      : `<span style="color:#6b6a65;font-size:12px;">${wo.closed_date}</span>`;
+    return `<tr>
+      <td>#${wo.id}</td>
+      <td>${aircraft ? aircraft.tail_number : "-"}</td>
+      <td>${wo.description}</td>
+      <td>${typeLabels[wo.action_type]}</td>
+      <td><span class="wo-status ${wo.status === "open" ? "wo-open" : "wo-closed"}">${wo.status === "open" ? "Abierta" : "Cerrada"}</span></td>
+      <td>${actionBtn}</td>
+    </tr>`;
+  }).join("");
+}
+
+function closeWO(id) {
+  closeWorkOrder(id, todayIso());
+  renderDashboard();
+  renderWorkOrders();
+  refreshWoComponentOptions();
+}
+
+document.getElementById("flDate").value = todayIso();
+refreshAircraftSelects();
+renderDashboard();
+renderWorkOrders();
+</script>
+</body>
+</html>

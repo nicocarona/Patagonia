@@ -1,0 +1,239 @@
+// ============================================================================
+// API HTTP del módulo de programación de vuelos (node:http, sin dependencias)
+//
+// Funciona igual con SQLite o PostgreSQL — el motor se elige solo, según si
+// DATABASE_URL está definido (ver db.js).
+//
+// Endpoints:
+//   GET    /aircraft
+//   GET    /crew
+//   GET    /crew/:id/qualifications
+//   POST   /crew/:id/qualifications
+//   GET    /bookings?aircraftId=&pilotId=&date=
+//   POST   /bookings
+//   POST   /bookings/validate
+//   POST   /bookings/:id/cancel
+//   POST   /bookings/:id/close
+//   GET    /bookings/pending-sync
+//   POST   /bookings/:id/mark-synced
+//
+// Uso local (SQLite):        node src/server.js
+// Uso con SEED:               SEED=1 node src/server.js
+// Uso en producción (Postgres): DATABASE_URL=postgres://... node src/server.js
+// ============================================================================
+
+const http = require("node:http");
+const { URL } = require("node:url");
+const { openDatabase, all, get, run } = require("./db");
+const {
+  createBooking, validateBooking, cancelBooking, closeBooking, markBookingSynced, getPendingSync,
+  setAircraftAirworthy, upsertAircraft, upsertCrewMember,
+} = require("./schedulingEngine");
+const { requireAuth } = require("./auth");
+
+const PORT = process.env.PORT || 3002;
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body, null, 2));
+}
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function main() {
+  const db = await openDatabase(process.env.DB_FILE || ":memory:");
+
+  if (process.env.SEED === "1") {
+    // Misma guarda de seguridad que el módulo de facturación: si ya hay
+    // aeronaves cargadas, no vuelve a sembrar (evita duplicados al
+    // reiniciar en una base Postgres persistente).
+    const existing = await get(db, "SELECT COUNT(*) as n FROM aircraft");
+    if (Number(existing?.n ?? 0) > 0) {
+      console.log("SEED=1 definido, pero ya hay datos cargados — se omite la siembra para no duplicar.");
+    } else {
+      const { seed } = require("./seed");
+      await seed(db);
+      console.log("Base de datos sembrada con datos de ejemplo (SEED=1).");
+    }
+  }
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-scheduling-module" } }) },
+    { method: "GET", pattern: /^\/aircraft$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM aircraft") }) },
+    {
+      // Usado por fleet-integration para sembrar/actualizar el maestro de
+      // aeronaves (fleet-core-module) dentro de este módulo.
+      method: "POST",
+      pattern: /^\/aircraft$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.tailNumber || !b.model) return { status: 400, body: { error: "Se requiere tailNumber y model" } };
+        return { status: 200, body: await upsertAircraft(db, b) };
+      },
+    },
+    {
+      // Usado por fleet-integration para reflejar el estado de
+      // aeronavegabilidad calculado por fleet-maintenance-module.
+      method: "POST",
+      pattern: /^\/aircraft\/(\d+)\/airworthy$/,
+      roles: ["admin", "integration"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        return { status: 200, body: await setAircraftAirworthy(db, Number(m[1]), !!b.airworthy) };
+      },
+    },
+    { method: "GET", pattern: /^\/crew$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM crew_members") }) },
+    {
+      // Usado por fleet-integration para sembrar/actualizar el maestro de
+      // tripulantes (fleet-core-module) dentro de este módulo.
+      method: "POST",
+      pattern: /^\/crew$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.employeeCode || !b.name || !b.role) return { status: 400, body: { error: "Se requiere employeeCode, name y role" } };
+        return { status: 200, body: await upsertCrewMember(db, b) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/crew\/(\d+)\/qualifications$/,
+      handler: async (req, url, m) => ({ status: 200, body: await all(db, "SELECT * FROM crew_qualifications WHERE crew_id = ?", [m[1]]) }),
+    },
+    {
+      // También usado por fleet-integration (rol 'integration') para
+      // reflejar las habilitaciones de tipo vigentes calculadas por
+      // fleet-training-module — ver flujo 4/5 en fleet-integration/sync.js.
+      method: "POST",
+      pattern: /^\/crew\/(\d+)\/qualifications$/,
+      roles: ["admin", "ops", "crew", "integration"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        if (!b.aircraft_model || !b.valid_until) return { status: 400, body: { error: "Se requiere aircraft_model y valid_until" } };
+        const result = await run(
+          db,
+          `INSERT INTO crew_qualifications (crew_id, aircraft_model, qualification_type, valid_until) VALUES (?, ?, ?, ?)`,
+          [m[1], b.aircraft_model, b.qualification_type ?? "type_rating", b.valid_until]
+        );
+        return { status: 201, body: await get(db, "SELECT * FROM crew_qualifications WHERE id = ?", [result.lastInsertRowid]) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/bookings$/,
+      handler: async (req, url) => {
+        const conditions = ["status = 'confirmed'"];
+        const params = [];
+        if (url.searchParams.get("aircraftId")) { conditions.push("aircraft_id = ?"); params.push(url.searchParams.get("aircraftId")); }
+        if (url.searchParams.get("pilotId")) { conditions.push("pilot_id = ?"); params.push(url.searchParams.get("pilotId")); }
+        if (url.searchParams.get("date")) { conditions.push("booking_date = ?"); params.push(url.searchParams.get("date")); }
+        return { status: 200, body: await all(db, `SELECT * FROM bookings WHERE ${conditions.join(" AND ")} ORDER BY booking_date, start_time`, params) };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings\/validate$/,
+      roles: ["admin", "ops"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        const result = await validateBooking(db, {
+          aircraftId: b.aircraftId, pilotId: b.pilotId, bookingDate: b.bookingDate,
+          startTime: b.startTime, endTime: b.endTime, maxDailyDutyHours: b.maxDailyDutyHours,
+        });
+        return { status: 200, body: result };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings$/,
+      roles: ["admin", "ops"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        const required = ["aircraftId", "pilotId", "bookingDate", "startTime", "endTime"];
+        for (const f of required) if (b[f] === undefined) return { status: 400, body: { error: `Falta el campo requerido: ${f}` } };
+        try {
+          const booking = await createBooking(db, b);
+          return { status: 201, body: booking };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings\/(\d+)\/cancel$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, m) => {
+        try {
+          return { status: 200, body: await cancelBooking(db, Number(m[1])) };
+        } catch (err) {
+          return { status: 404, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings\/(\d+)\/close$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await closeBooking(db, Number(m[1]), b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/bookings\/pending-sync$/,
+      handler: async () => ({ status: 200, body: await getPendingSync(db) }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings\/(\d+)\/mark-synced$/,
+      roles: ["admin", "integration"],
+      handler: async (req, url, m) => ({ status: 200, body: await markBookingSynced(db, Number(m[1])) }),
+    },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`Módulo de programación escuchando en http://localhost:${PORT}`);
+    console.log(`Motor de base de datos: ${db.engine}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("No se pudo iniciar el servidor:", err.message);
+  process.exit(1);
+});

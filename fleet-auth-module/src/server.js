@@ -1,0 +1,125 @@
+// ============================================================================
+// API HTTP del módulo de autenticación (node:http, sin dependencias)
+//
+// Endpoints:
+//   GET    /health              -> público, para healthchecks de Render/monitoreo
+//   POST   /login                -> público, devuelve { token, username, role }
+//   GET    /users                -> requiere rol admin
+//   POST   /users                -> requiere rol admin (alta de usuario nuevo)
+//
+// Uso local (SQLite):          node src/server.js
+// Uso con SEED:                 SEED=1 node src/server.js
+// Uso en producción (Postgres): DATABASE_URL=postgres://... AUTH_SECRET=... node src/server.js
+//
+// IMPORTANTE: AUTH_SECRET debe ser EXACTAMENTE el mismo valor en este
+// módulo y en los otros seis — es el secreto compartido que firma y
+// verifica los tokens. Sin AUTH_SECRET definido, todos usan el mismo valor
+// de desarrollo por defecto (ver src/auth.js), lo cual es aceptable solo
+// para correr el prototipo localmente.
+// ============================================================================
+
+const http = require("node:http");
+const { URL } = require("node:url");
+const { openDatabase, all, get } = require("./db");
+const { createUser, login } = require("./authEngine");
+const { requireAuth } = require("./auth");
+
+const PORT = process.env.PORT || 3007;
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body, null, 2));
+}
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function main() {
+  const db = await openDatabase(process.env.DB_FILE || ":memory:");
+
+  if (process.env.SEED === "1") {
+    const existing = await get(db, "SELECT COUNT(*) as n FROM users");
+    if (Number(existing?.n ?? 0) > 0) {
+      console.log("SEED=1 definido, pero ya hay datos cargados — se omite la siembra para no duplicar.");
+    } else {
+      const { seed, DEMO_PASSWORD } = require("./seed");
+      await seed(db);
+      console.log(`Base de datos sembrada con usuarios de ejemplo (SEED=1). Contraseña de demo para todos: "${DEMO_PASSWORD}" — cámbiala antes de producción.`);
+    }
+  }
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-auth-module" } }) },
+    {
+      method: "POST",
+      pattern: /^\/login$/,
+      auth: false,
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          const result = await login(db, b);
+          return { status: 200, body: result };
+        } catch (err) {
+          return { status: 401, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/users$/,
+      roles: ["admin"],
+      handler: async () => ({ status: 200, body: await all(db, "SELECT id, username, role, full_name, active, created_at FROM users ORDER BY username") }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/users$/,
+      roles: ["admin"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createUser(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`Módulo de autenticación escuchando en http://localhost:${PORT}`);
+    console.log(`Motor de base de datos: ${db.engine}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("No se pudo iniciar el servidor:", err.message);
+  process.exit(1);
+});

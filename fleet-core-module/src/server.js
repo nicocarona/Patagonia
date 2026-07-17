@@ -1,0 +1,146 @@
+// ============================================================================
+// API HTTP del maestro de datos (fleet-core-module) — node:http, sin
+// dependencias.
+//
+// Endpoints:
+//   GET    /aircraft
+//   POST   /aircraft            -> alta/edición (upsert por tail_number)
+//   GET    /crew
+//   POST   /crew                -> alta/edición (upsert por employee_code)
+//   GET    /customers
+//   POST   /customers
+//   POST   /sync-log            -> fleet-integration registra cada sync aquí
+//   GET    /sync-status         -> maestro completo + últimos 40 eventos de sync
+//
+// Uso local (SQLite):          node src/server.js
+// Uso con SEED:                 SEED=1 node src/server.js
+// Uso en producción (Postgres): DATABASE_URL=postgres://... node src/server.js
+// ============================================================================
+
+const http = require("node:http");
+const { URL } = require("node:url");
+const { openDatabase, all, get } = require("./db");
+const { createCustomer, upsertAircraft, upsertCrewMember, logSync, getSyncStatus } = require("./coreEngine");
+const { requireAuth } = require("./auth");
+
+const PORT = process.env.PORT || 3006;
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body, null, 2));
+}
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function main() {
+  const db = await openDatabase(process.env.DB_FILE || ":memory:");
+
+  if (process.env.SEED === "1") {
+    const existing = await get(db, "SELECT COUNT(*) as n FROM aircraft");
+    if (Number(existing?.n ?? 0) > 0) {
+      console.log("SEED=1 definido, pero ya hay datos cargados — se omite la siembra para no duplicar.");
+    } else {
+      const { seed } = require("./seed");
+      await seed(db);
+      console.log("Base de datos sembrada con datos de ejemplo (SEED=1).");
+    }
+  }
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-core-module" } }) },
+    { method: "GET", pattern: /^\/aircraft$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM aircraft ORDER BY tail_number") }) },
+    {
+      method: "POST",
+      pattern: /^\/aircraft$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await upsertAircraft(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    { method: "GET", pattern: /^\/crew$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM crew_members ORDER BY employee_code") }) },
+    {
+      method: "POST",
+      pattern: /^\/crew$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await upsertCrewMember(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    { method: "GET", pattern: /^\/customers$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM customers ORDER BY name") }) },
+    {
+      method: "POST",
+      pattern: /^\/customers$/,
+      roles: ["admin"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createCustomer(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/sync-log$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        const required = ["entityType", "entityKey", "targetModule", "result"];
+        for (const f of required) if (!b[f]) return { status: 400, body: { error: `Falta el campo requerido: ${f}` } };
+        await logSync(db, b);
+        return { status: 201, body: { ok: true } };
+      },
+    },
+    { method: "GET", pattern: /^\/sync-status$/, handler: async () => ({ status: 200, body: await getSyncStatus(db) }) },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`Maestro de datos (fleet-core-module) escuchando en http://localhost:${PORT}`);
+    console.log(`Motor de base de datos: ${db.engine}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("No se pudo iniciar el servidor:", err.message);
+  process.exit(1);
+});

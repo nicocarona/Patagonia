@@ -1,0 +1,221 @@
+// ============================================================================
+// API HTTP del módulo de Mantenimiento por Componente (node:http, sin dependencias)
+//
+// Endpoints:
+//   GET    /aircraft
+//   GET    /aircraft/:id/components
+//   POST   /components
+//   GET    /dashboard                    -> estado de vida de toda la flota
+//   POST   /flights/check                -> valida SIN registrar (para UI en vivo)
+//   POST   /flights                      -> registra un vuelo (rechaza si excede límites)
+//   GET    /flights?aircraftId=
+//   POST   /work-orders
+//   POST   /work-orders/:id/close        -> cierra y resetea vida si es overhaul/replacement
+//   GET    /work-orders?status=
+//
+// Uso local (SQLite):          node src/server.js
+// Uso con SEED:                 SEED=1 node src/server.js
+// Uso en producción (Postgres): DATABASE_URL=postgres://... node src/server.js
+// ============================================================================
+
+const http = require("node:http");
+const { URL } = require("node:url");
+const { openDatabase, all, get, run } = require("./db");
+const {
+  checkFlightAgainstLimits, logFlight, createComponent,
+  createWorkOrder, closeWorkOrder, getFleetDashboard, upsertAircraft,
+} = require("./maintenanceEngine");
+const { requireAuth } = require("./auth");
+
+const PORT = process.env.PORT || 3005;
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body, null, 2));
+}
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function main() {
+  const db = await openDatabase(process.env.DB_FILE || ":memory:");
+
+  if (process.env.SEED === "1") {
+    const existing = await get(db, "SELECT COUNT(*) as n FROM aircraft");
+    if (Number(existing?.n ?? 0) > 0) {
+      console.log("SEED=1 definido, pero ya hay datos cargados — se omite la siembra para no duplicar.");
+    } else {
+      const { seed } = require("./seed");
+      await seed(db);
+      console.log("Base de datos sembrada con datos de ejemplo (SEED=1).");
+    }
+  }
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-maintenance-module" } }) },
+    { method: "GET", pattern: /^\/aircraft$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM aircraft ORDER BY tail_number") }) },
+    {
+      // Usado por fleet-integration para sembrar/actualizar el maestro de
+      // aeronaves (fleet-core-module) dentro de este módulo.
+      method: "POST",
+      pattern: /^\/aircraft$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.tailNumber || !b.model) return { status: 400, body: { error: "Se requiere tailNumber y model" } };
+        return { status: 200, body: await upsertAircraft(db, b) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/aircraft\/(\d+)\/components$/,
+      handler: async (req, url, m) => ({
+        status: 200,
+        body: await all(db, "SELECT * FROM components WHERE aircraft_id = ? AND status = 'installed'", [Number(m[1])]),
+      }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/components$/,
+      roles: ["admin", "maintenance"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createComponent(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/dashboard$/,
+      handler: async (req, url) => ({
+        status: 200,
+        body: await getFleetDashboard(db, url.searchParams.get("asOfDate") || today()),
+      }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/flights\/check$/,
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.aircraftId || b.plannedHours == null) {
+          return { status: 400, body: { error: "Faltan campos requeridos: aircraftId, plannedHours" } };
+        }
+        return {
+          status: 200,
+          body: await checkFlightAgainstLimits(db, {
+            aircraftId: b.aircraftId,
+            plannedHours: b.plannedHours,
+            plannedCycles: b.plannedCycles ?? 1,
+            asOfDate: b.asOfDate || today(),
+          }),
+        };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/flights$/,
+      roles: ["admin", "maintenance"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.aircraftId || !b.flightDate || b.hobbsHours == null) {
+          return { status: 400, body: { error: "Faltan campos requeridos: aircraftId, flightDate, hobbsHours" } };
+        }
+        try {
+          return { status: 201, body: await logFlight(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/flights$/,
+      handler: async (req, url) => {
+        const aircraftId = url.searchParams.get("aircraftId");
+        if (aircraftId) {
+          return { status: 200, body: await all(db, "SELECT * FROM flight_logs WHERE aircraft_id = ? ORDER BY flight_date DESC", [Number(aircraftId)]) };
+        }
+        return { status: 200, body: await all(db, "SELECT * FROM flight_logs ORDER BY flight_date DESC") };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/work-orders$/,
+      roles: ["admin", "maintenance"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createWorkOrder(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/work-orders\/(\d+)\/close$/,
+      roles: ["admin", "maintenance"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await closeWorkOrder(db, Number(m[1]), b.closedDate) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/work-orders$/,
+      handler: async (req, url) => {
+        const status = url.searchParams.get("status");
+        if (status) return { status: 200, body: await all(db, "SELECT * FROM work_orders WHERE status = ? ORDER BY opened_date DESC", [status]) };
+        return { status: 200, body: await all(db, "SELECT * FROM work_orders ORDER BY opened_date DESC") };
+      },
+    },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`Módulo de Mantenimiento escuchando en http://localhost:${PORT}`);
+    console.log(`Motor de base de datos: ${db.engine}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("No se pudo iniciar el servidor:", err.message);
+  process.exit(1);
+});

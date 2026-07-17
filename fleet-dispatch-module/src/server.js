@@ -1,0 +1,195 @@
+const http = require("http");
+const { openDatabase } = require("./db");
+const { seed } = require("./seed");
+const { requireAuth } = require("./auth");
+const {
+  createFlightRelease,
+  getFlightReleaseWithDetails,
+  releaseFlight,
+  recomputeChecks,
+  markDeparted,
+  closeFlightRelease,
+  cancelFlightRelease,
+  getDispatchDashboard,
+  getPendingFuelSync,
+  markFuelSynced,
+} = require("./dispatchEngine");
+
+const PORT = process.env.PORT || 3009;
+const DB_FILE = process.env.DATABASE_URL ? undefined : process.env.SQLITE_FILE || ":memory:";
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body, null, 2));
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => (data += chunk));
+    req.on("end", () => {
+      if (!data) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch (err) {
+        reject(new Error("JSON inválido en el cuerpo de la solicitud."));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function start() {
+  const db = await openDatabase(DB_FILE);
+  if (process.env.SEED === "1") await seed(db);
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, module: "fleet-dispatch-module" } }) },
+
+    {
+      method: "GET",
+      pattern: /^\/dispatch$/,
+      roles: null,
+      handler: async (req, url) => {
+        const date = url.searchParams.get("date") || undefined;
+        const list = await getDispatchDashboard(db, { date });
+        return { status: 200, body: list };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/dispatch\/(\d+)$/,
+      roles: null,
+      handler: async (req, url, match) => {
+        const release = await getFlightReleaseWithDetails(db, Number(match[1]));
+        if (!release) return { status: 404, body: { error: "Despacho no encontrado." } };
+        return { status: 200, body: release };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch$/,
+      roles: ["admin", "ops"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          const created = await createFlightRelease(db, body);
+          return { status: 201, body: created };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch\/(\d+)\/recompute$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, match) => {
+        const body = await readBody(req);
+        try {
+          const updated = await recomputeChecks(db, Number(match[1]), body);
+          return { status: 200, body: updated };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch\/(\d+)\/release$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, match) => {
+        const body = await readBody(req);
+        try {
+          const released = await releaseFlight(db, Number(match[1]), body);
+          return { status: 200, body: released };
+        } catch (err) {
+          return { status: 409, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch\/(\d+)\/depart$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, match) => {
+        try {
+          const updated = await markDeparted(db, Number(match[1]));
+          return { status: 200, body: updated };
+        } catch (err) {
+          return { status: 409, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch\/(\d+)\/close$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, match) => {
+        try {
+          const updated = await closeFlightRelease(db, Number(match[1]));
+          return { status: 200, body: updated };
+        } catch (err) {
+          return { status: 409, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch\/(\d+)\/cancel$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, match) => {
+        try {
+          const updated = await cancelFlightRelease(db, Number(match[1]));
+          return { status: 200, body: updated };
+        } catch (err) {
+          return { status: 409, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      // Usado por fleet-integration (flujo 6) para encontrar despachos
+      // cerrados cuyo consumo real de combustible todavía no se registró
+      // en fleet-fuel-module.
+      method: "GET",
+      pattern: /^\/dispatch\/pending-fuel-sync$/,
+      roles: null,
+      handler: async () => ({ status: 200, body: await getPendingFuelSync(db) }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/dispatch\/(\d+)\/mark-fuel-synced$/,
+      roles: ["admin", "integration"],
+      handler: async (req, url, match) => ({ status: 200, body: await markFuelSynced(db, Number(match[1])) }),
+    },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`fleet-dispatch-module escuchando en http://localhost:${PORT} (motor: ${db.engine})`);
+  });
+}
+
+start().catch((err) => {
+  console.error("Error al iniciar fleet-dispatch-module:", err);
+  process.exit(1);
+});

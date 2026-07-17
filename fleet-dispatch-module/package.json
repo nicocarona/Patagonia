@@ -1,0 +1,17 @@
+{
+  "name": "fleet-dispatch-module",
+  "version": "1.0.0",
+  "description": "Despacho de vuelo (flight release / OFP) para el sistema de control de flota de helicópteros",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node src/cli-demo.js",
+    "seed-start": "SEED=1 node src/server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "optionalDependencies": {
+    "pg": "^8.11.0"
+  }
+}

@@ -1,0 +1,5 @@
+(node:6) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Base de datos sembrada con datos de ejemplo (SEED=1).
+Módulo de Tripulación y Fatiga escuchando en http://localhost:3003
+Motor de base de datos: sqlite

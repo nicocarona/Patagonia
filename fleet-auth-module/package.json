@@ -1,0 +1,16 @@
+{
+  "name": "fleet-auth-module",
+  "version": "0.1.0",
+  "description": "Autenticación y usuarios para el sistema de control de flota de helicópteros",
+  "main": "src/server.js",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "start": "node src/server.js",
+    "start:seed": "SEED=1 node src/server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "_comment_dependencies": "El paquete 'pg' solo se necesita si vas a usar PostgreSQL (DATABASE_URL definido). El JWT es implementación propia sobre node:crypto — ver src/auth.js y el README.",
+  "license": "UNLICENSED"
+}

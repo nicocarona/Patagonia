@@ -1,0 +1,13 @@
+{
+  "name": "fleet-system",
+  "version": "0.1.0",
+  "description": "Script único para levantar el sistema de control de flota de helicópteros (facturación + programación + sincronización)",
+  "main": "start-all.js",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "start": "node start-all.js",
+    "start:sync": "node start-all.js --sync"
+  },
+  "dependencies": {},
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,208 @@
+// ============================================================================
+// API HTTP del módulo SMS (node:http, sin dependencias)
+//
+// Endpoints:
+//   GET    /occurrences
+//   POST   /occurrences
+//   POST   /occurrences/:id/close
+//   GET    /hazards
+//   POST   /hazards
+//   GET    /corrective-actions
+//   POST   /corrective-actions
+//   POST   /corrective-actions/:id/complete
+//   POST   /frat/preview        -> calcula score sin guardar (para UI en vivo)
+//   POST   /frat                -> crea (rechaza si alto/extremo sin approvedBy)
+//   GET    /frat
+//   GET    /fatigue-snapshots
+//   POST   /fatigue-snapshots   -> usado por fleet-integration (flujo 7)
+//   GET    /dashboard
+//
+// Uso local (SQLite):        node src/server.js
+// Uso con SEED:               SEED=1 node src/server.js
+// Uso en producción (Postgres): DATABASE_URL=postgres://... node src/server.js
+// ============================================================================
+
+const http = require("node:http");
+const { URL } = require("node:url");
+const { openDatabase, all, get, run } = require("./db");
+const {
+  createFratAssessment, previewFratScore, createOccurrence, closeOccurrence,
+  createHazard, createCorrectiveAction, completeCorrectiveAction, getSafetyDashboard,
+  upsertFatigueSnapshot,
+} = require("./smsEngine");
+const { requireAuth } = require("./auth");
+
+const PORT = process.env.PORT || 3004;
+
+function sendJSON(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body, null, 2));
+}
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function main() {
+  const db = await openDatabase(process.env.DB_FILE || ":memory:");
+
+  if (process.env.SEED === "1") {
+    const existing = await get(db, "SELECT COUNT(*) as n FROM occurrences");
+    if (Number(existing?.n ?? 0) > 0) {
+      console.log("SEED=1 definido, pero ya hay datos cargados — se omite la siembra para no duplicar.");
+    } else {
+      const { seed } = require("./seed");
+      await seed(db);
+      console.log("Base de datos sembrada con datos de ejemplo (SEED=1).");
+    }
+  }
+
+  const routes = [
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-sms-module" } }) },
+    { method: "GET", pattern: /^\/occurrences$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM occurrences ORDER BY report_date DESC") }) },
+    {
+      method: "POST",
+      pattern: /^\/occurrences$/,
+      roles: ["admin", "safety"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createOccurrence(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/occurrences\/(\d+)\/close$/,
+      roles: ["admin", "safety"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await closeOccurrence(db, Number(m[1]), b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    { method: "GET", pattern: /^\/hazards$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM hazards ORDER BY risk_score DESC") }) },
+    {
+      method: "POST",
+      pattern: /^\/hazards$/,
+      roles: ["admin", "safety"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createHazard(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    { method: "GET", pattern: /^\/corrective-actions$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM corrective_actions ORDER BY due_date") }) },
+    {
+      method: "POST",
+      pattern: /^\/corrective-actions$/,
+      roles: ["admin", "safety"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        try {
+          return { status: 201, body: await createCorrectiveAction(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/corrective-actions\/(\d+)\/complete$/,
+      roles: ["admin", "safety"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await completeCorrectiveAction(db, Number(m[1]), b.completedDate) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      // Solo calcula un score, no guarda nada — abierto a cualquier rol
+      // autenticado (útil para que Programación/Tripulación previsualicen).
+      method: "POST",
+      pattern: /^\/frat\/preview$/,
+      handler: async (req) => {
+        const b = await readBody(req);
+        return { status: 200, body: await previewFratScore(db, b) };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/frat$/,
+      roles: ["admin", "safety", "ops"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.flightDate) return { status: 400, body: { error: "Falta el campo requerido: flightDate" } };
+        try {
+          return { status: 201, body: await createFratAssessment(db, b) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    { method: "GET", pattern: /^\/frat$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM frat_assessments ORDER BY flight_date DESC") }) },
+    { method: "GET", pattern: /^\/fatigue-snapshots$/, roles: null, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM fatigue_snapshots ORDER BY employee_code") }) },
+    {
+      // Usado por fleet-integration (flujo 7, "Tripulación -> SMS") para
+      // reflejar el score de fatiga real calculado por fleet-crew-module.
+      method: "POST",
+      pattern: /^\/fatigue-snapshots$/,
+      roles: ["admin", "safety", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        const required = ["employeeCode", "snapshotDate", "score", "level"];
+        for (const f of required) if (b[f] === undefined) return { status: 400, body: { error: `Falta el campo requerido: ${f}` } };
+        return { status: 200, body: await upsertFatigueSnapshot(db, b) };
+      },
+    },
+    { method: "GET", pattern: /^\/dashboard$/, handler: async () => ({ status: 200, body: await getSafetyDashboard(db) }) },
+  ];
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+    if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
+    try {
+      if (route.auth !== false) {
+        try {
+          req.auth = requireAuth(req, route.roles);
+        } catch (err) {
+          return sendJSON(res, err.statusCode || 401, { error: err.message });
+        }
+      }
+      const match = url.pathname.match(route.pattern);
+      const { status, body } = await route.handler(req, url, match);
+      sendJSON(res, status, body);
+    } catch (err) {
+      sendJSON(res, 500, { error: err.message });
+    }
+  });
+
+  server.listen(PORT, () => {
+    console.log(`Módulo SMS escuchando en http://localhost:${PORT}`);
+    console.log(`Motor de base de datos: ${db.engine}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("No se pudo iniciar el servidor:", err.message);
+  process.exit(1);
+});

@@ -1,0 +1,17 @@
+{
+  "name": "fleet-billing-module",
+  "version": "0.1.0",
+  "description": "Módulo de facturación para sistema de control de flota de helicópteros",
+  "main": "src/server.js",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "demo": "node src/cli-demo.js",
+    "start": "node src/server.js",
+    "start:seed": "SEED=1 node src/server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "_comment_dependencies": "El paquete 'pg' solo se necesita si vas a usar PostgreSQL (DATABASE_URL definido). Para correr con SQLite local no hace falta 'npm install' — node:sqlite es nativo de Node 22+.",
+  "license": "UNLICENSED"
+}
