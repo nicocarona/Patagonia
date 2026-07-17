@@ -1,0 +1,319 @@
+# ============================================================================
+# Render Blueprint — despliega los once módulos + sus bases PostgreSQL + el
+# job de sincronización de un solo clic. Sube este repo (con esta carpeta
+# como raíz) a GitHub, luego en Render.com: New -> Blueprint -> selecciona
+# el repo. Render lee este archivo automáticamente y crea todo lo de abajo.
+#
+# Plan "free" usado aquí para que puedas probarlo sin costo — súbelo a un
+# plan pagado antes de operar con datos reales de producción (el plan free
+# de Render duerme cada servicio tras 15 min sin tráfico y tarda ~30s en
+# despertar en la siguiente solicitud; con 11 servicios + 1 cron job, eso
+# afecta directamente a la sincronización si el módulo de destino está
+# dormido — ver DEPLOY.md).
+#
+# AUTH_SECRET se define UNA vez en el grupo `fleet-shared` de abajo
+# (`generateValue: true` — Render genera un valor aleatorio al crear el
+# blueprint) y los demás servicios lo heredan vía `envVarGroups`. Es lo que
+# permite que un token emitido por fleet-auth-api se verifique en los otros
+# diez. No lo cambies módulo por módulo — si un solo servicio queda con un
+# AUTH_SECRET distinto, los tokens dejan de validar ahí.
+#
+# fleet-dispatch-api (despacho de vuelo) tiene su propia base de datos y
+# auth compartido, y participa del cron de sincronización solo en el flujo
+# 6 (hacia fleet-fuel-api) — ver fleet-dispatch-module/README.md.
+# ============================================================================
+
+envVarGroups:
+  - name: fleet-shared
+    envVars:
+      - key: AUTH_SECRET
+        generateValue: true
+
+databases:
+  - name: fleet-auth-db
+    plan: free
+    databaseName: fleet_auth
+    user: fleet_auth_user
+
+  - name: fleet-core-db
+    plan: free
+    databaseName: fleet_core
+    user: fleet_core_user
+
+  - name: fleet-billing-db
+    plan: free
+    databaseName: fleet_billing
+    user: fleet_billing_user
+
+  - name: fleet-scheduling-db
+    plan: free
+    databaseName: fleet_scheduling
+    user: fleet_scheduling_user
+
+  - name: fleet-crew-db
+    plan: free
+    databaseName: fleet_crew
+    user: fleet_crew_user
+
+  - name: fleet-sms-db
+    plan: free
+    databaseName: fleet_sms
+    user: fleet_sms_user
+
+  - name: fleet-maintenance-db
+    plan: free
+    databaseName: fleet_maintenance
+    user: fleet_maintenance_user
+
+  - name: fleet-inventory-db
+    plan: free
+    databaseName: fleet_inventory
+    user: fleet_inventory_user
+
+  - name: fleet-dispatch-db
+    plan: free
+    databaseName: fleet_dispatch
+    user: fleet_dispatch_user
+
+  - name: fleet-training-db
+    plan: free
+    databaseName: fleet_training
+    user: fleet_training_user
+
+  - name: fleet-fuel-db
+    plan: free
+    databaseName: fleet_fuel
+    user: fleet_fuel_user
+
+services:
+  - type: web
+    name: fleet-auth-api
+    runtime: node
+    plan: free
+    rootDir: fleet-auth-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-auth-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-core-api
+    runtime: node
+    plan: free
+    rootDir: fleet-core-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-core-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-billing-api
+    runtime: node
+    plan: free
+    rootDir: fleet-billing-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-billing-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-scheduling-api
+    runtime: node
+    plan: free
+    rootDir: fleet-scheduling-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-scheduling-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-crew-api
+    runtime: node
+    plan: free
+    rootDir: fleet-crew-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-crew-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-sms-api
+    runtime: node
+    plan: free
+    rootDir: fleet-sms-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-sms-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-maintenance-api
+    runtime: node
+    plan: free
+    rootDir: fleet-maintenance-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-maintenance-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-inventory-api
+    runtime: node
+    plan: free
+    rootDir: fleet-inventory-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-inventory-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-dispatch-api
+    runtime: node
+    plan: free
+    rootDir: fleet-dispatch-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-dispatch-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-training-api
+    runtime: node
+    plan: free
+    rootDir: fleet-training-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-training-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  - type: web
+    name: fleet-fuel-api
+    runtime: node
+    plan: free
+    rootDir: fleet-fuel-module
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - fleet-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fleet-fuel-db
+          property: connectionString
+      - key: SEED
+        value: "1"
+
+  # Cron job: corre los 7 flujos de fleet-integration/sync.js cada 15 min,
+  # autenticado como la cuenta de servicio 'fleet-integration'. Apunta a las
+  # URLs públicas *.onrender.com de cada servicio de arriba — Render
+  # resuelve `fromService` automáticamente al nombre público una vez
+  # desplegado. Si el plan free duerme un servicio, esta corrida lo
+  # despierta (con ~30s de latencia) en vez de fallar silenciosamente.
+  #
+  # IMPORTANTE: AUTH_INTEGRATION_PASSWORD abajo usa la contraseña de
+  # demostración sembrada por SEED=1 en fleet-auth-api ("changeme123" — ver
+  # fleet-auth-module/README.md). Cámbiala (y actualiza el usuario
+  # 'fleet-integration' vía POST /users) antes de operar con datos reales.
+  - type: cron
+    name: fleet-sync-job
+    runtime: node
+    plan: free
+    rootDir: fleet-integration
+    schedule: "*/15 * * * *"
+    buildCommand: "true"
+    startCommand: node sync.js
+    envVars:
+      - key: AUTH_URL
+        fromService: { type: web, name: fleet-auth-api, property: hostport }
+      - key: AUTH_INTEGRATION_PASSWORD
+        value: "changeme123"
+      - key: CORE_URL
+        fromService: { type: web, name: fleet-core-api, property: hostport }
+      - key: BILLING_URL
+        fromService: { type: web, name: fleet-billing-api, property: hostport }
+      - key: SCHEDULING_URL
+        fromService: { type: web, name: fleet-scheduling-api, property: hostport }
+      - key: CREW_URL
+        fromService: { type: web, name: fleet-crew-api, property: hostport }
+      - key: MAINTENANCE_URL
+        fromService: { type: web, name: fleet-maintenance-api, property: hostport }
+      - key: INVENTORY_URL
+        fromService: { type: web, name: fleet-inventory-api, property: hostport }
+      - key: TRAINING_URL
+        fromService: { type: web, name: fleet-training-api, property: hostport }
+      - key: DISPATCH_URL
+        fromService: { type: web, name: fleet-dispatch-api, property: hostport }
+      - key: FUEL_URL
+        fromService: { type: web, name: fleet-fuel-api, property: hostport }
+      - key: SMS_URL
+        fromService: { type: web, name: fleet-sms-api, property: hostport }
