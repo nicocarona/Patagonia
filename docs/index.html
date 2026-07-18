@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Panel — Sistema de Control de Flota de Helicópteros</title>
+<style>
+  :root {
+    --bg: #0f1720;
+    --panel: #1a2532;
+    --panel2: #212f3f;
+    --border: #2c3e50;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --blue: #3b82f6;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  #login-screen {
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #login-screen h1 {
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+  #login-screen p.sub {
+    color: var(--muted);
+    margin-top: 0;
+    margin-bottom: 24px;
+    font-size: 14px;
+  }
+  .login-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 28px;
+    width: 320px;
+  }
+  .login-box label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    margin-top: 14px;
+  }
+  .login-box input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .login-box button, .btn {
+    margin-top: 20px;
+    width: 100%;
+    padding: 11px;
+    background: var(--blue);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .login-box button:hover, .btn:hover { opacity: 0.9; }
+  #login-error {
+    color: var(--red);
+    font-size: 13px;
+    margin-top: 12px;
+    min-height: 16px;
+  }
+  #app { display: none; }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; }
+  header .who { font-size: 13px; color: var(--muted); }
+  header button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  nav {
+    display: flex;
+    gap: 4px;
+    padding: 10px 24px 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-wrap: wrap;
+  }
+  nav button {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    border-bottom: 2px solid transparent;
+  }
+  nav button.active {
+    color: var(--text);
+    border-bottom: 2px solid var(--blue);
+  }
+  main {
+    padding: 24px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 12px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge.ok { background: rgba(34,197,94,0.15); color: var(--green); }
+  .badge.warn { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .badge.bad { background: rgba(239,68,68,0.15); color: var(--red); }
+  .loading, .empty, .error-msg { color: var(--muted); font-size: 13px; padding: 8px 0; }
+  .error-msg { color: var(--red); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  @media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+  .form-grid label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  .form-grid input, .form-grid select {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .form-actions { margin-top: 14px; display: flex; align-items: center; gap: 12px; }
+  .form-actions .btn { width: auto; margin-top: 0; padding: 9px 18px; }
+  .form-msg { font-size: 13px; }
+  .form-msg.ok { color: var(--green); }
+  .form-msg.bad { color: var(--red); }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <h1>Sistema de Control de Flota de Helicópteros</h1>
+  <p class="sub">Iniciá sesión para continuar</p>
+  <div class="login-box">
+    <label for="username">Usuario</label>
+    <input id="username" type="text" placeholder="admin" autocomplete="username">
+    <label for="password">Contraseña</label>
+    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password">
+    <button onclick="doLogin()">Ingresar</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<div id="app">
+  <header>
+    <h1>Sistema de Control de Flota de Helicópteros</h1>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <span class="who" id="who"></span>
+      <button onclick="logout()">Cerrar sesión</button>
+    </div>
+  </header>
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+
+<script>
+const BASE = {
+  auth: "https://fleet-auth-api.onrender.com",
+  core: "https://fleet-core-api.onrender.com",
+  billing: "https://fleet-billing-api.onrender.com",
+  scheduling: "https://fleet-scheduling-api.onrender.com",
+  crew: "https://fleet-crew-api.onrender.com",
+  sms: "https://fleet-sms-api.onrender.com",
+  maintenance: "https://fleet-maintenance-api.onrender.com",
+  inventory: "https://fleet-inventory-api.onrender.com",
+  dispatch: "https://fleet-dispatch-api.onrender.com",
+  training: "https://fleet-training-api.onrender.com",
+  fuel: "https://fleet-fuel-api.onrender.com",
+};
+
+let TOKEN = null;
+let ROLE = null;
+let FULLNAME = null;
+
+const TABS = [
+  { id: "resumen", label: "Resumen" },
+  { id: "mantenimiento", label: "Mantenimiento" },
+  { id: "programacion", label: "Programación" },
+  { id: "entrenamiento", label: "Entrenamiento" },
+  { id: "combustible", label: "Combustible" },
+  { id: "inventario", label: "Inventario" },
+  { id: "sms", label: "SMS" },
+];
+
+async function api(base, path) {
+  const res = await fetch(base + path, { headers: { Authorization: "Bearer " + TOKEN } });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error("HTTP " + res.status + (t ? " — " + t.slice(0, 200) : ""));
+  }
+  return res.json();
+}
+
+async function apiPost(base, path, body) {
+  const res = await fetch(base + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + TOKEN },
+    body: JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* respuesta vacía */ }
+  if (!res.ok) {
+    throw new Error((data && data.error) || ("HTTP " + res.status));
+  }
+  return data;
+}
+
+// Arma un <form> a partir de una lista de campos y lo envía por POST al
+// enviarse. `fields`: [{ name, label, type, required, options, placeholder }]
+function buildForm(formId, fields, onSubmitLabel) {
+  const inputs = fields.map((f) => {
+    const req = f.required ? "required" : "";
+    if (f.type === "select") {
+      const opts = f.options.map((o) => '<option value="' + escapeHtml(o.value) + '">' + escapeHtml(o.label) + "</option>").join("");
+      return '<div><label>' + escapeHtml(f.label) + '</label><select name="' + f.name + '" ' + req + ">" + opts + "</select></div>";
+    }
+    return '<div><label>' + escapeHtml(f.label) + (f.required ? " *" : "") + '</label><input name="' + f.name + '" type="' + (f.type || "text") + '" ' + (f.placeholder ? 'placeholder="' + escapeHtml(f.placeholder) + '"' : "") + " " + req + " /></div>";
+  }).join("");
+  return (
+    '<form id="' + formId + '" class="form-grid">' + inputs + "</form>" +
+    '<div class="form-actions"><button type="button" class="btn" style="max-width:220px" onclick="submitForm(\'' + formId + '\')">' + onSubmitLabel + '</button>' +
+    '<span class="form-msg" id="' + formId + '-msg"></span></div>'
+  );
+}
+
+const FORM_HANDLERS = {};
+
+async function submitForm(formId) {
+  const form = document.getElementById(formId);
+  const msg = document.getElementById(formId + "-msg");
+  msg.textContent = "";
+  msg.className = "form-msg";
+  const data = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    data[el.name] = el.value;
+  }
+  try {
+    await FORM_HANDLERS[formId](data);
+    msg.textContent = "Guardado correctamente.";
+    msg.className = "form-msg ok";
+    form.reset();
+  } catch (err) {
+    msg.textContent = "Error: " + err.message;
+    msg.className = "form-msg bad";
+  }
+}
+
+async function doLogin() {
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+  const errEl = document.getElementById("login-error");
+  errEl.textContent = "";
+  if (!username || !password) {
+    errEl.textContent = "Completá usuario y contraseña.";
+    return;
+  }
+  try {
+    const res = await fetch(BASE.auth + "/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || "No se pudo iniciar sesión.";
+      return;
+    }
+    TOKEN = data.token;
+    ROLE = data.role;
+    FULLNAME = data.fullName || username;
+    document.getElementById("login-screen").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    document.getElementById("who").textContent = FULLNAME + " (" + ROLE + ")";
+    renderNav();
+    showTab("resumen");
+  } catch (err) {
+    errEl.textContent = "No se pudo conectar: " + err.message;
+  }
+}
+
+function logout() {
+  TOKEN = null;
+  document.getElementById("app").style.display = "none";
+  document.getElementById("login-screen").style.display = "flex";
+  document.getElementById("username").value = "";
+  document.getElementById("password").value = "";
+}
+
+function renderNav() {
+  const nav = document.getElementById("nav");
+  nav.innerHTML = "";
+  TABS.forEach((t) => {
+    const b = document.createElement("button");
+    b.textContent = t.label;
+    b.id = "tab-" + t.id;
+    b.onclick = () => showTab(t.id);
+    nav.appendChild(b);
+  });
+}
+
+function setActiveTab(id) {
+  TABS.forEach((t) => {
+    document.getElementById("tab-" + t.id).classList.toggle("active", t.id === id);
+  });
+}
+
+async function showTab(id) {
+  setActiveTab(id);
+  const main = document.getElementById("main");
+  main.innerHTML = '<div class="loading">Cargando…</div>';
+  try {
+    if (id === "resumen") await renderResumen(main);
+    else if (id === "mantenimiento") await renderMantenimiento(main);
+    else if (id === "programacion") await renderProgramacion(main);
+    else if (id === "entrenamiento") await renderEntrenamiento(main);
+    else if (id === "combustible") await renderCombustible(main);
+    else if (id === "inventario") await renderInventario(main);
+    else if (id === "sms") await renderSms(main);
+  } catch (err) {
+    main.innerHTML = '<div class="card"><div class="error-msg">Error al cargar: ' + escapeHtml(err.message) + '</div></div>';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function badge(status) {
+  const map = {
+    ok: "ok", vigente: "ok", airworthy: "ok",
+    due_soon: "warn", por_vencer: "warn",
+    overdue: "bad", vencido: "bad",
+  };
+  const cls = map[status] || "warn";
+  return '<span class="badge ' + cls + '">' + escapeHtml(status) + '</span>';
+}
+
+async function renderResumen(main) {
+  const services = Object.entries(BASE);
+  let html = '<div class="card"><h2>Estado de los 11 servicios</h2><table><thead><tr><th>Módulo</th><th>Estado</th></tr></thead><tbody id="svc-body"></tbody></table></div>';
+  main.innerHTML = html;
+  const body = document.getElementById("svc-body");
+  for (const [name, base] of services) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + name + "</td><td>verificando…</td>";
+    body.appendChild(tr);
+    fetch(base + "/health").then((r) => r.json()).then(() => {
+      tr.innerHTML = "<td>" + name + "</td><td>" + badge("ok") + "</td>";
+    }).catch(() => {
+      tr.innerHTML = "<td>" + name + "</td><td>" + badge("overdue") + "</td>";
+    });
+  }
+}
+
+async function renderMantenimiento(main) {
+  const data = await api(BASE.maintenance, "/dashboard");
+  let rows = data.map((a) => {
+    const status = a.airworthy ? "airworthy" : "overdue";
+    return "<tr><td>" + escapeHtml(a.aircraft.tail_number) + "</td><td>" + escapeHtml(a.aircraft.model) + "</td><td>" + badge(status) + "</td><td>" + (a.overdueComponents?.length || 0) + " vencido(s), " + (a.dueSoonComponents?.length || 0) + " por vencer</td></tr>";
+  }).join("");
+  const formHtml = buildForm("form-workorder", [
+    { name: "aircraftId", label: "ID de aeronave (Mantenimiento)", type: "number", required: true, placeholder: "1" },
+    { name: "description", label: "Descripción", required: true, placeholder: "Cambio de kit de flotación" },
+    { name: "actionType", label: "Tipo de acción", type: "select", options: [
+      { value: "repair", label: "Reparación" },
+      { value: "inspection", label: "Inspección" },
+      { value: "overhaul", label: "Overhaul (resetea vida del componente)" },
+      { value: "replacement", label: "Reemplazo (resetea vida del componente)" },
+    ] },
+    { name: "componentId", label: "ID de componente (opcional, para overhaul/reemplazo)", type: "number", placeholder: "3" },
+  ], "Abrir orden de trabajo");
+  FORM_HANDLERS["form-workorder"] = async (d) => {
+    await apiPost(BASE.maintenance, "/work-orders", {
+      aircraftId: Number(d.aircraftId),
+      description: d.description,
+      actionType: d.actionType,
+      componentId: d.componentId ? Number(d.componentId) : undefined,
+    });
+  };
+  main.innerHTML =
+    '<div class="card"><h2>Aeronavegabilidad de la flota</h2><table><thead><tr><th>Matrícula</th><th>Modelo</th><th>Estado</th><th>Componentes</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="empty">Sin datos</td></tr>') + '</tbody></table></div>' +
+    '<div class="card"><h2>Abrir orden de trabajo</h2>' + formHtml + '</div>';
+}
+
+async function renderProgramacion(main) {
+  const data = await api(BASE.scheduling, "/bookings");
+  let rows = data.map((b) => {
+    return "<tr><td>" + b.id + "</td><td>" + escapeHtml(String(b.aircraft_id)) + "</td><td>" + escapeHtml(String(b.pilot_id)) + "</td><td>" + escapeHtml(b.booking_date || "") + "</td><td>" + escapeHtml((b.start_time || "") + "–" + (b.end_time || "")) + "</td><td>" + escapeHtml(b.status || "") + "</td></tr>";
+  }).join("");
+  const formHtml = buildForm("form-booking", [
+    { name: "aircraftId", label: "ID de aeronave (Programación)", type: "number", required: true, placeholder: "1" },
+    { name: "pilotId", label: "ID de piloto (Programación)", type: "number", required: true, placeholder: "1" },
+    { name: "bookingDate", label: "Fecha", type: "date", required: true },
+    { name: "startTime", label: "Hora inicio (HH:MM)", required: true, placeholder: "08:00" },
+    { name: "endTime", label: "Hora fin (HH:MM)", required: true, placeholder: "10:00" },
+    { name: "missionType", label: "Tipo de misión (opcional)", placeholder: "Transporte de personal" },
+  ], "Crear reserva");
+  FORM_HANDLERS["form-booking"] = async (d) => {
+    await apiPost(BASE.scheduling, "/bookings", {
+      aircraftId: Number(d.aircraftId),
+      pilotId: Number(d.pilotId),
+      bookingDate: d.bookingDate,
+      startTime: d.startTime,
+      endTime: d.endTime,
+      missionType: d.missionType || undefined,
+    });
+  };
+  main.innerHTML =
+    '<div class="card"><h2>Reservas de vuelo</h2><table><thead><tr><th>ID</th><th>Aeronave</th><th>Piloto</th><th>Fecha</th><th>Horario</th><th>Estado</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Sin reservas</td></tr>') + '</tbody></table></div>' +
+    '<div class="card"><h2>Crear reserva de vuelo</h2>' + formHtml + '</div>';
+}
+
+async function renderEntrenamiento(main) {
+  const data = await api(BASE.training, "/currency");
+  let rows = data.map((c) => {
+    const ready = c.summary?.flightReady ? "ok" : "vencido";
+    return "<tr><td>" + escapeHtml(c.crew.employee_code) + "</td><td>" + escapeHtml(c.crew.name) + "</td><td>" + escapeHtml(c.crew.role) + "</td><td>" + badge(ready === "ok" ? "vigente" : "vencido") + "</td><td>" + (c.summary?.currentAircraftModels || []).join(", ") + "</td></tr>";
+  }).join("");
+  const formHtml = buildForm("form-rating", [
+    { name: "employeeCode", label: "Legajo (employee code)", required: true, placeholder: "EMP-0001" },
+    { name: "aircraftModel", label: "Modelo de aeronave", required: true, placeholder: "Airbus H145" },
+    { name: "qualifiedDate", label: "Fecha de habilitación inicial", type: "date" },
+    { name: "lastProficiencyCheck", label: "Última verificación de pericia", type: "date" },
+    { name: "expiryDate", label: "Fecha de vencimiento", type: "date", required: true },
+  ], "Guardar habilitación de tipo");
+  FORM_HANDLERS["form-rating"] = async (d) => {
+    await apiPost(BASE.training, "/type-ratings", {
+      employeeCode: d.employeeCode,
+      aircraftModel: d.aircraftModel,
+      qualifiedDate: d.qualifiedDate || undefined,
+      lastProficiencyCheck: d.lastProficiencyCheck || undefined,
+      expiryDate: d.expiryDate,
+    });
+  };
+  main.innerHTML =
+    '<div class="card"><h2>Vigencia de la tripulación</h2><table><thead><tr><th>Legajo</th><th>Nombre</th><th>Rol</th><th>Apto para volar</th><th>Modelos habilitados</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="empty">Sin datos</td></tr>') + '</tbody></table></div>' +
+    '<div class="card"><h2>Agregar/actualizar habilitación de tipo</h2><p style="color:var(--muted); font-size:12px; margin-top:-6px;">El tripulante debe existir primero (creado por el maestro de datos o por sincronización).</p>' + formHtml + '</div>';
+}
+
+async function renderCombustible(main) {
+  const data = await api(BASE.fuel, "/dashboard");
+  let rows = (data.tanks || data).map((t) => {
+    const pct = t.percentFull ?? (t.capacity_liters ? Math.round((t.current_liters / t.capacity_liters) * 100) : "-");
+    return "<tr><td>" + escapeHtml(t.base || "") + "</td><td>" + escapeHtml(String(t.current_liters ?? "-")) + " L</td><td>" + escapeHtml(String(t.capacity_liters ?? "-")) + " L</td><td>" + pct + "%</td></tr>";
+  }).join("");
+  const formHtml = buildForm("form-uplift", [
+    { name: "tailNumber", label: "Matrícula", required: true, placeholder: "XA-HEL1" },
+    { name: "base", label: "Base", required: true, placeholder: "Base Norte" },
+    { name: "liters", label: "Litros", type: "number", required: true, placeholder: "350" },
+    { name: "upliftDate", label: "Fecha", type: "date", required: true },
+  ], "Registrar repostaje (uplift)");
+  FORM_HANDLERS["form-uplift"] = async (d) => {
+    await apiPost(BASE.fuel, "/uplifts", {
+      tailNumber: d.tailNumber,
+      base: d.base,
+      liters: Number(d.liters),
+      upliftDate: d.upliftDate,
+    });
+  };
+  main.innerHTML =
+    '<div class="card"><h2>Tanques de combustible</h2><table><thead><tr><th>Base</th><th>Nivel actual</th><th>Capacidad</th><th>% lleno</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="empty">Sin datos</td></tr>') + '</tbody></table></div>' +
+    '<div class="card"><h2>Registrar repostaje</h2><p style="color:var(--muted); font-size:12px; margin-top:-6px;">Rechaza si no hay stock suficiente en el tanque de esa base.</p>' + formHtml + '</div>';
+}
+
+async function renderInventario(main) {
+  const data = await api(BASE.inventory, "/dashboard");
+  let rows = (Array.isArray(data) ? data : []).map((p) => {
+    return "<tr><td>" + escapeHtml(p.part_number || "") + "</td><td>" + escapeHtml(p.description || p.name || "") + "</td><td>" + (p.totalStock ?? p.stock ?? "-") + "</td><td>" + (p.openPurchaseOrders ?? p.open_orders ?? 0) + "</td></tr>";
+  }).join("");
+  const formHtml = buildForm("form-stock", [
+    { name: "partId", label: "ID de parte (del catálogo)", type: "number", required: true, placeholder: "1" },
+    { name: "warehouseId", label: "ID de almacén", type: "number", required: true, placeholder: "1" },
+    { name: "quantity", label: "Cantidad a recibir", type: "number", required: true, placeholder: "10" },
+    { name: "reference", label: "Referencia (opcional)", placeholder: "OC-0042" },
+  ], "Recibir stock");
+  FORM_HANDLERS["form-stock"] = async (d) => {
+    await apiPost(BASE.inventory, "/stock/receive", {
+      partId: Number(d.partId),
+      warehouseId: Number(d.warehouseId),
+      quantity: Number(d.quantity),
+      reference: d.reference || undefined,
+    });
+  };
+  main.innerHTML =
+    '<div class="card"><h2>Inventario de repuestos</h2><table><thead><tr><th>Parte</th><th>Descripción</th><th>Stock</th><th>Órdenes abiertas</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="empty">Sin datos</td></tr>') + '</tbody></table></div>' +
+    '<div class="card"><h2>Recibir stock en almacén</h2><p style="color:var(--muted); font-size:12px; margin-top:-6px;">Los IDs de parte/almacén se ven en GET /parts y GET /warehouses de este módulo.</p>' + formHtml + '</div>';
+}
+
+async function renderSms(main) {
+  const data = await api(BASE.sms, "/dashboard");
+  const formHtml = buildForm("form-occurrence", [
+    { name: "reportDate", label: "Fecha del reporte", type: "date", required: true },
+    { name: "occurrenceType", label: "Tipo", type: "select", options: [
+      { value: "incident", label: "Incidente" },
+      { value: "accident", label: "Accidente" },
+      { value: "hazard_report", label: "Reporte de peligro" },
+      { value: "near_miss", label: "Cuasi-accidente" },
+    ] },
+    { name: "severity", label: "Severidad", type: "select", options: [
+      { value: "low", label: "Baja" },
+      { value: "medium", label: "Media" },
+      { value: "high", label: "Alta" },
+      { value: "critical", label: "Crítica" },
+    ] },
+    { name: "aircraftTail", label: "Matrícula (opcional)", placeholder: "XA-HEL1" },
+    { name: "description", label: "Descripción", required: true, placeholder: "Qué pasó" },
+  ], "Reportar ocurrencia");
+  FORM_HANDLERS["form-occurrence"] = async (d) => {
+    await apiPost(BASE.sms, "/occurrences", {
+      reportDate: d.reportDate,
+      occurrenceType: d.occurrenceType,
+      severity: d.severity,
+      aircraftTail: d.aircraftTail || undefined,
+      description: d.description,
+    });
+  };
+  main.innerHTML =
+    '<div class="card"><h2>Resumen de seguridad (SMS)</h2><pre style="white-space:pre-wrap; font-size:12px; color:var(--muted);">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre></div>' +
+    '<div class="card"><h2>Reportar ocurrencia</h2>' + formHtml + '</div>';
+}
+
+document.getElementById("password").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+</script>
+
+</body>
+</html>
