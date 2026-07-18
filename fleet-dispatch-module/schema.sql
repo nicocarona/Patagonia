@@ -93,12 +93,15 @@ CREATE TABLE IF NOT EXISTS flight_logs (
   actual_arrival_time     TEXT NOT NULL,   -- HH:MM
   psv_start_time          TEXT,            -- HH:MM, por defecto departure -1h
   psv_end_time            TEXT,            -- HH:MM, por defecto arrival +30min
+  flight_hours            REAL,            -- horas de vuelo (auto de horarios, u horómetro si el piloto lo pasa)
   route_flown             TEXT,
   fuel_location            TEXT,           -- dónde se cargó combustible
   fuel_liters              REAL,
+  technical_remarks        TEXT,           -- novedades técnicas del piloto (squawks) → generan OT en Mantenimiento
   wb_screenshot_base64     TEXT,           -- captura del peso y balance (generada por la app o subida)
   fpl_screenshot_base64    TEXT,           -- captura del FPL DGAC
   pax_manifest_base64      TEXT,           -- captura del manifiesto de pasajeros
+  synced_to_maintenance    INTEGER NOT NULL DEFAULT 0,  -- flujo 8: horas reflejadas en Mantenimiento
   created_at               TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

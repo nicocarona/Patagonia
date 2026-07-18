@@ -301,17 +301,32 @@ function addMinutesToTime(hhmm, minutesDelta) {
   return `${outH}:${outM}`;
 }
 
+// Duración del vuelo en horas decimales a partir de los horarios reales.
+// Si el aterrizaje es "antes" del despegue se asume que cruzó la medianoche.
+function computeFlightHours(departureHHMM, arrivalHHMM) {
+  const [dh, dm] = departureHHMM.split(":").map(Number);
+  const [ah, am] = arrivalHHMM.split(":").map(Number);
+  const minutes = (((ah * 60 + am) - (dh * 60 + dm)) + 1440) % 1440;
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
 async function createFlightLog(db, params) {
   const required = ["tailNumber", "flightDate", "actualDepartureTime", "actualArrivalTime"];
   for (const f of required) if (!params[f]) throw new Error(`Falta el campo requerido: ${f}`);
 
   const psvStartTime = params.psvStartTime || addMinutesToTime(params.actualDepartureTime, -60);
   const psvEndTime = params.psvEndTime || addMinutesToTime(params.actualArrivalTime, 30);
+  // Horas de vuelo: calculadas de los horarios reales, pero el piloto puede
+  // pasar el valor del horómetro (hobbs) si difiere — el horómetro manda.
+  const flightHours =
+    params.flightHours != null && !Number.isNaN(Number(params.flightHours))
+      ? Number(params.flightHours)
+      : computeFlightHours(params.actualDepartureTime, params.actualArrivalTime);
 
   const result = await run(
     db,
-    `INSERT INTO flight_logs (flight_release_id, tail_number, pilot_employee_code, flight_date, actual_departure_time, actual_arrival_time, psv_start_time, psv_end_time, route_flown, fuel_location, fuel_liters, wb_screenshot_base64, fpl_screenshot_base64, pax_manifest_base64)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO flight_logs (flight_release_id, tail_number, pilot_employee_code, flight_date, actual_departure_time, actual_arrival_time, psv_start_time, psv_end_time, flight_hours, route_flown, fuel_location, fuel_liters, technical_remarks, wb_screenshot_base64, fpl_screenshot_base64, pax_manifest_base64)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       params.flightReleaseId ?? null,
       params.tailNumber,
@@ -321,9 +336,11 @@ async function createFlightLog(db, params) {
       params.actualArrivalTime,
       psvStartTime,
       psvEndTime,
+      flightHours,
       params.routeFlown ?? null,
       params.fuelLocation ?? null,
       params.fuelLiters ?? null,
+      params.technicalRemarks ?? null,
       params.wbScreenshotBase64 ?? null,
       params.fplScreenshotBase64 ?? null,
       params.paxManifestBase64 ?? null,
@@ -362,6 +379,25 @@ async function listFlightLogs(db, { tailNumber, date } = {}) {
   return result;
 }
 
+// Bitácoras cuyas horas de vuelo todavía no se reflejaron en Mantenimiento
+// (usado por el flujo 8 de fleet-integration — mismo patrón que el flujo 6
+// de combustible). Se excluyen los adjuntos base64 para no mover archivos
+// pesados por la red en cada corrida del sync.
+async function getPendingMaintenanceSync(db) {
+  return all(
+    db,
+    `SELECT id, flight_release_id, tail_number, pilot_employee_code, flight_date,
+            actual_departure_time, actual_arrival_time, flight_hours, route_flown,
+            technical_remarks
+     FROM flight_logs WHERE synced_to_maintenance = 0 ORDER BY flight_date, id`
+  );
+}
+
+async function markMaintenanceSynced(db, flightLogId) {
+  await run(db, "UPDATE flight_logs SET synced_to_maintenance = 1 WHERE id = ?", [flightLogId]);
+  return getFlightLogWithDetails(db, flightLogId);
+}
+
 module.exports = {
   computeWeightBalance,
   computeFuelPlan,
@@ -376,7 +412,10 @@ module.exports = {
   getPendingFuelSync,
   markFuelSynced,
   addMinutesToTime,
+  computeFlightHours,
   createFlightLog,
   getFlightLogWithDetails,
   listFlightLogs,
+  getPendingMaintenanceSync,
+  markMaintenanceSynced,
 };

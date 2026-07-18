@@ -82,13 +82,22 @@ async function checkFlightAgainstLimits(db, { aircraftId, plannedHours, plannedC
 }
 
 /**
- * Registra un vuelo: SOLO si no excede ningún límite de componente. Si pasa
- * la validación, incrementa horas/ciclos de la aeronave y de todos sus
- * componentes instalados.
+ * Registra un vuelo. Dos modos:
+ *
+ * - PLANIFICADO (por defecto): SOLO si no excede ningún límite de
+ *   componente — sirve para cargar vuelos a futuro sin comerse la vida
+ *   de un componente por error.
+ * - REAL (`actualFlight: true`): el vuelo YA OCURRIÓ (viene de la bitácora
+ *   del piloto vía el flujo 8 de integración). Rechazarlo falsearía las
+ *   horas reales de la aeronave, así que SIEMPRE se registra — como en
+ *   cualquier sistema M&E real (AMOS/TRAX): la realidad se registra, y si
+ *   quedó excedido un límite, eso aparece como overdue en el dashboard y
+ *   el flujo 2 (aeronavegabilidad) deja la aeronave fuera de Programación.
+ *   La respuesta incluye `limitWarnings` con las excedencias detectadas.
  */
-async function logFlight(db, { aircraftId, flightDate, hobbsHours, cycles = 1, notes }) {
+async function logFlight(db, { aircraftId, flightDate, hobbsHours, cycles = 1, notes, actualFlight = false }) {
   const check = await checkFlightAgainstLimits(db, { aircraftId, plannedHours: hobbsHours, plannedCycles: cycles, asOfDate: flightDate });
-  if (!check.ok) {
+  if (!check.ok && !actualFlight) {
     throw new Error(`No se puede registrar el vuelo — excede límites de componente:\n  - ${check.violations.join("\n  - ")}`);
   }
 
@@ -104,7 +113,11 @@ async function logFlight(db, { aircraftId, flightDate, hobbsHours, cycles = 1, n
     `INSERT INTO flight_logs (aircraft_id, flight_date, hobbs_hours, cycles, notes) VALUES (?, ?, ?, ?, ?)`,
     [aircraftId, flightDate, hobbsHours, cycles, notes ?? null]
   );
-  return get(db, "SELECT * FROM flight_logs WHERE id = ?", [result.lastInsertRowid]);
+  const saved = await get(db, "SELECT * FROM flight_logs WHERE id = ?", [result.lastInsertRowid]);
+  if (!check.ok && actualFlight) {
+    return { ...saved, limitWarnings: check.violations };
+  }
+  return saved;
 }
 
 async function createComponent(db, params) {

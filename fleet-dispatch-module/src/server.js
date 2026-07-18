@@ -16,6 +16,8 @@ const {
   createFlightLog,
   getFlightLogWithDetails,
   listFlightLogs,
+  getPendingMaintenanceSync,
+  markMaintenanceSynced,
 } = require("./dispatchEngine");
 
 const PORT = process.env.PORT || 3009;
@@ -190,7 +192,10 @@ async function start() {
     {
       method: "POST",
       pattern: /^\/flight-logs$/,
-      roles: ["admin", "ops"],
+      // "crew" incluido: como en un tech log electrónico real (AMOSeTL,
+      // eTechLog8), es el PILOTO quien carga su propia bitácora post-vuelo,
+      // no solo operaciones.
+      roles: ["admin", "ops", "crew"],
       handler: async (req) => {
         const body = await readBody(req);
         try {
@@ -200,6 +205,20 @@ async function start() {
           return { status: 400, body: { error: err.message } };
         }
       },
+    },
+    {
+      // Usado por fleet-integration (flujo 8): bitácoras cuyas horas de
+      // vuelo aún no se reflejaron en Mantenimiento.
+      method: "GET",
+      pattern: /^\/flight-logs\/pending-maintenance-sync$/,
+      roles: null,
+      handler: async () => ({ status: 200, body: await getPendingMaintenanceSync(db) }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/flight-logs\/(\d+)\/mark-maintenance-synced$/,
+      roles: ["admin", "integration"],
+      handler: async (req, url, match) => ({ status: 200, body: await markMaintenanceSynced(db, Number(match[1])) }),
     },
   ];
 

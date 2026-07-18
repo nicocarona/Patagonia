@@ -128,7 +128,9 @@ async function main() {
     {
       method: "POST",
       pattern: /^\/flights$/,
-      roles: ["admin", "maintenance"],
+      // "integration" incluido: el flujo 8 de fleet-integration registra
+      // acá las horas reales de cada bitácora de vuelo del piloto.
+      roles: ["admin", "maintenance", "integration"],
       handler: async (req) => {
         const b = await readBody(req);
         if (!b.aircraftId || !b.flightDate || b.hobbsHours == null) {
@@ -155,7 +157,9 @@ async function main() {
     {
       method: "POST",
       pattern: /^\/work-orders$/,
-      roles: ["admin", "maintenance"],
+      // "integration" incluido: el flujo 8 abre una orden de trabajo
+      // automática cuando el piloto reporta una novedad técnica (squawk).
+      roles: ["admin", "maintenance", "integration"],
       handler: async (req) => {
         const b = await readBody(req);
         try {

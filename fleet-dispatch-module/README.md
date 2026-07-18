@@ -92,7 +92,9 @@ el resto del sistema). Lectura (`GET`) abierta a cualquier rol autenticado.
 | POST | `/dispatch/:id/mark-fuel-synced` | admin, integration | marca un despacho como ya sincronizado con Combustible |
 | GET | `/flight-logs?tailNumber=&date=` | cualquiera | listar bitácoras de vuelo (post-vuelo) |
 | GET | `/flight-logs/:id` | cualquiera | detalle de una bitácora, con sus cargas de aceite |
-| POST | `/flight-logs` | admin, ops | registrar la bitácora de un vuelo ya realizado |
+| POST | `/flight-logs` | admin, ops, **crew** | registrar la bitácora de un vuelo ya realizado — el piloto carga la suya, como en un tech log electrónico real |
+| GET | `/flight-logs/pending-maintenance-sync` | cualquiera | bitácoras cuyas horas aún no se reflejaron en Mantenimiento (flujo 8) |
+| POST | `/flight-logs/:id/mark-maintenance-synced` | admin, integration | marca una bitácora como ya reflejada en Mantenimiento |
 
 ## Bitácora de vuelo (post-vuelo) — a pedido del operador, julio 2026
 
@@ -121,6 +123,25 @@ operador de helicópteros, a revisar si crece mucho.
 verificada** — mismo criterio de transparencia que el resto del sistema
 (umbrales de FRAT, límites de descanso, densidad de combustible). Ajustalo
 si tu manual de operaciones define otro margen.
+
+### El ciclo del tech log (julio 2026, segunda iteración)
+
+Siguiendo el patrón de los tech logs electrónicos de las aerolíneas
+(AMOSeTL de Swiss-AS, TRAX, eTechLog8), la bitácora ahora cierra el ciclo
+piloto → sistema:
+
+- **Horas de vuelo** (`flight_hours`): se calculan automáticamente de los
+  horarios reales (con cruce de medianoche), pero el piloto puede pasar el
+  valor del horómetro si difiere — el horómetro manda. El **flujo 8** de
+  `fleet-integration` las suma a la aeronave y a TODOS sus componentes
+  instalados en `fleet-maintenance-module` — así la vida por componente se
+  alimenta de vuelos reales, no de cargas manuales.
+- **Novedades técnicas** (`technical_remarks`): el squawk del piloto. Si la
+  bitácora trae texto (distinto de "sin novedades"), el flujo 8 abre
+  automáticamente una **orden de trabajo de inspección** en Mantenimiento
+  con la descripción literal del piloto — nadie transcribe nada.
+- **Rol `crew`** puede crear bitácoras: es el piloto quien firma su tech
+  log, no un administrativo.
 
 ### Ejemplo: registrar una bitácora de vuelo
 

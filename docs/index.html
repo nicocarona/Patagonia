@@ -525,11 +525,12 @@ async function renderBitacora(main) {
   const data = await api(BASE.dispatch, "/flight-logs");
   let rows = data.map((l) => {
     const oils = (l.oilAdditions || []).map((o) => o.component + " " + o.quantity + o.unit).join(", ") || "—";
-    return "<tr><td>" + escapeHtml(l.tail_number) + "</td><td>" + escapeHtml(l.flight_date) + "</td><td>" + escapeHtml(l.actual_departure_time + "–" + l.actual_arrival_time) + "</td><td>" + escapeHtml((l.psv_start_time || "") + "–" + (l.psv_end_time || "")) + "</td><td>" + escapeHtml(l.pilot_employee_code || "") + "</td><td>" + oils + "</td></tr>";
+    const novedades = (l.technical_remarks || "").trim();
+    return "<tr><td>" + escapeHtml(l.tail_number) + "</td><td>" + escapeHtml(l.flight_date) + "</td><td>" + escapeHtml(l.actual_departure_time + "–" + l.actual_arrival_time) + "</td><td>" + (l.flight_hours != null ? l.flight_hours + " h" : "—") + "</td><td>" + escapeHtml((l.psv_start_time || "") + "–" + (l.psv_end_time || "")) + "</td><td>" + escapeHtml(l.pilot_employee_code || "") + "</td><td>" + oils + "</td><td>" + (novedades ? escapeHtml(novedades) : "—") + "</td></tr>";
   }).join("");
 
   main.innerHTML =
-    '<div class="card"><h2>Bitácoras de vuelo registradas</h2><table><thead><tr><th>Matrícula</th><th>Fecha</th><th>Horario vuelo</th><th>PSV</th><th>Piloto</th><th>Aceite agregado</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Sin bitácoras</td></tr>') + '</tbody></table></div>' +
+    '<div class="card"><h2>Bitácoras de vuelo registradas</h2><table><thead><tr><th>Matrícula</th><th>Fecha</th><th>Horario vuelo</th><th>Horas</th><th>PSV</th><th>Piloto</th><th>Aceite agregado</th><th>Novedades técnicas</th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Sin bitácoras</td></tr>') + '</tbody></table></div>' +
 
     '<div class="card"><h2>1. Peso y balance (se genera la captura automáticamente)</h2>' +
     '<div id="wb-card" style="background:var(--panel2); padding:14px; border-radius:8px;">' +
@@ -553,11 +554,13 @@ async function renderBitacora(main) {
       '<div><label>Fecha *</label><input name="flightDate" type="date" required></div>' +
       '<div><label>Hora despegue *</label><input id="fl-dep" name="actualDepartureTime" required placeholder="09:00" oninput="syncPsv()"></div>' +
       '<div><label>Hora aterrizaje *</label><input id="fl-arr" name="actualArrivalTime" required placeholder="10:30" oninput="syncPsv()"></div>' +
-      '<div><label>Inicio PSV (auto, editable)</label><input id="fl-psv-start" name="psvStartTime" placeholder="—"></div>' +
-      '<div><label>Fin PSV (auto, editable)</label><input id="fl-psv-end" name="psvEndTime" placeholder="—"></div>' +
+      '<div><label>Inicio PSV (auto, editable)</label><input id="fl-psv-start" name="psvStartTime" placeholder="—" oninput="this.dataset.touched=1"></div>' +
+      '<div><label>Fin PSV (auto, editable)</label><input id="fl-psv-end" name="psvEndTime" placeholder="—" oninput="this.dataset.touched=1"></div>' +
+      '<div><label>Horas de vuelo (auto, editable si el horómetro difiere)</label><input id="fl-hours" name="flightHours" type="number" step="0.01" placeholder="—" oninput="this.dataset.touched=1"></div>' +
       '<div style="grid-column:1/-1;"><label>Ruta realizada</label><input name="routeFlown" placeholder="Base Norte - Campo Minero Sur - Base Norte"></div>' +
       '<div><label>Dónde se cargó combustible</label><input name="fuelLocation" placeholder="Base Norte"></div>' +
       '<div><label>Litros de combustible</label><input name="fuelLiters" type="number" placeholder="350"></div>' +
+      '<div style="grid-column:1/-1;"><label>Novedades técnicas / fallas observadas (si escribís algo acá, se abre una orden de trabajo automática en Mantenimiento)</label><textarea name="technicalRemarks" rows="2" placeholder="Sin novedades" style="width:100%; resize:vertical;"></textarea></div>' +
     '</form>' +
 
     '<h2 style="margin-top:18px;">Aceite agregado</h2>' +
@@ -584,6 +587,16 @@ function syncPsv() {
   const psvEndEl = document.getElementById("fl-psv-end");
   if (dep && !psvStartEl.dataset.touched) psvStartEl.value = addMinutesToTime(dep, -60);
   if (arr && !psvEndEl.dataset.touched) psvEndEl.value = addMinutesToTime(arr, 30);
+  // Horas de vuelo estimadas de los horarios (el piloto puede corregirlas
+  // con el valor del horómetro). Si el aterrizaje es "antes" del despegue
+  // se asume cruce de medianoche.
+  const hoursEl = document.getElementById("fl-hours");
+  if (dep && arr && dep.includes(":") && arr.includes(":") && !hoursEl.dataset.touched) {
+    const [dh, dm] = dep.split(":").map(Number);
+    const [ah, am] = arr.split(":").map(Number);
+    const minutes = (((ah * 60 + am) - (dh * 60 + dm)) + 1440) % 1440;
+    hoursEl.value = Math.round((minutes / 60) * 100) / 100;
+  }
 }
 
 async function submitFlightLog() {
@@ -616,9 +629,11 @@ async function submitFlightLog() {
       actualArrivalTime: data.actualArrivalTime,
       psvStartTime: data.psvStartTime || undefined,
       psvEndTime: data.psvEndTime || undefined,
+      flightHours: data.flightHours ? Number(data.flightHours) : undefined,
       routeFlown: data.routeFlown || undefined,
       fuelLocation: data.fuelLocation || undefined,
       fuelLiters: data.fuelLiters ? Number(data.fuelLiters) : undefined,
+      technicalRemarks: data.technicalRemarks || undefined,
       oilAdditions,
       wbScreenshotBase64: WB_SCREENSHOT || undefined,
       fplScreenshotBase64: fplBase64,

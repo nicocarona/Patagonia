@@ -61,14 +61,23 @@ CREATE TABLE IF NOT EXISTS flight_logs (
   actual_arrival_time     TEXT NOT NULL,
   psv_start_time          TEXT,
   psv_end_time            TEXT,
+  flight_hours            REAL,
   route_flown             TEXT,
   fuel_location            TEXT,
   fuel_liters              REAL,
+  technical_remarks        TEXT,
   wb_screenshot_base64     TEXT,
   fpl_screenshot_base64    TEXT,
   pax_manifest_base64      TEXT,
+  synced_to_maintenance    INTEGER NOT NULL DEFAULT 0,
   created_at               TEXT NOT NULL DEFAULT NOW()::TEXT
 );
+
+-- Migración para bases creadas antes de estas columnas (la tabla ya existía
+-- en producción, y CREATE TABLE IF NOT EXISTS no agrega columnas nuevas).
+ALTER TABLE flight_logs ADD COLUMN IF NOT EXISTS flight_hours REAL;
+ALTER TABLE flight_logs ADD COLUMN IF NOT EXISTS technical_remarks TEXT;
+ALTER TABLE flight_logs ADD COLUMN IF NOT EXISTS synced_to_maintenance INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS oil_additions (
   id               SERIAL PRIMARY KEY,

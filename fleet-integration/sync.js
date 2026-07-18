@@ -2,7 +2,7 @@
 // Capa de integración — fleet-integration/sync.js
 //
 // Conecta los servicios independientes (cada uno con su propia base de
-// datos) vía sus APIs REST. Siete flujos, en este orden porque cada uno
+// datos) vía sus APIs REST. Ocho flujos, en este orden porque cada uno
 // depende del anterior:
 //
 //   1. syncMasterData()          Maestro (fleet-core-module) -> Facturación,
@@ -43,6 +43,14 @@
 //                                 necesita que alguien adivine qué tan
 //                                 cansado está el piloto: si no se pasa un
 //                                 fatigueScore explícito, lo hereda de acá.
+//   8. syncFlightLogsToMaintenance() Bitácora (fleet-dispatch-module) ->
+//                                 Mantenimiento. El cierre del ciclo del
+//                                 tech log: las horas de vuelo REALES de
+//                                 cada bitácora del piloto se suman a la
+//                                 aeronave y sus componentes, y las
+//                                 novedades técnicas reportadas (squawks)
+//                                 abren una orden de trabajo automática —
+//                                 como AMOSeTL/TRAX en las aerolíneas.
 //
 // Por qué está separado en tres funciones en vez de una sola tabla
 // compartida: la arquitectura es federada (cada módulo es un servicio HTTP
@@ -64,7 +72,7 @@
 //
 // Requiere Node 22+ (usa fetch nativo). No tiene dependencias externas.
 //
-// Uso — una pasada de los siete flujos:
+// Uso — una pasada de los ocho flujos:
 //   node sync.js
 // Uso — solo un flujo (para depurar):
 //   node sync.js --only=master-data
@@ -74,6 +82,7 @@
 //   node sync.js --only=bookings
 //   node sync.js --only=fuel
 //   node sync.js --only=fatigue
+//   node sync.js --only=flight-logs
 // ============================================================================
 
 const CORE_URL = process.env.CORE_URL || "http://localhost:3006";
@@ -157,7 +166,7 @@ async function logToCore(entry) {
 // 1) Maestro -> módulos operativos
 // ----------------------------------------------------------------------------
 async function syncMasterData() {
-  console.log("== 1/7 Maestro (fleet-core-module) -> módulos operativos ==");
+  console.log("== 1/8 Maestro (fleet-core-module) -> módulos operativos ==");
   await ensureAuth();
   const [coreAircraft, coreCrew] = await Promise.all([
     getJSON(`${CORE_URL}/aircraft`),
@@ -229,7 +238,7 @@ async function syncMasterData() {
 // 2) Mantenimiento -> Programación (gating de aeronavegabilidad)
 // ----------------------------------------------------------------------------
 async function syncAirworthiness() {
-  console.log("== 2/7 Mantenimiento -> Programación (aeronavegabilidad) ==");
+  console.log("== 2/8 Mantenimiento -> Programación (aeronavegabilidad) ==");
   await ensureAuth();
   const [dashboard, schedAircraft] = await Promise.all([
     getJSON(`${MAINTENANCE_URL}/dashboard`),
@@ -266,7 +275,7 @@ async function syncAirworthiness() {
 // 3) Mantenimiento -> Inventario (alertas de reposición automática)
 // ----------------------------------------------------------------------------
 async function syncInventoryAlerts() {
-  console.log("== 3/7 Mantenimiento -> Inventario (alertas de reposición) ==");
+  console.log("== 3/8 Mantenimiento -> Inventario (alertas de reposición) ==");
   await ensureAuth();
   const [maintDashboard, invDashboard] = await Promise.all([
     getJSON(`${MAINTENANCE_URL}/dashboard`),
@@ -325,7 +334,7 @@ async function syncInventoryAlerts() {
 // 4) Entrenamiento -> Programación (habilitaciones de tipo vigentes)
 // ----------------------------------------------------------------------------
 async function syncTrainingQualifications() {
-  console.log("== 4/7 Entrenamiento -> Programación (habilitaciones de tipo) ==");
+  console.log("== 4/8 Entrenamiento -> Programación (habilitaciones de tipo) ==");
   await ensureAuth();
   const [trainingDashboard, schedCrew] = await Promise.all([
     getJSON(`${TRAINING_URL}/currency`),
@@ -391,7 +400,7 @@ async function buildBillingLookupMaps() {
 }
 
 async function syncBookingsToBilling() {
-  console.log("== 5/7 Programación -> Facturación (reservas completadas) ==");
+  console.log("== 5/8 Programación -> Facturación (reservas completadas) ==");
   await ensureAuth();
   const pending = await getJSON(`${SCHEDULING_URL}/bookings/pending-sync`);
   if (pending.length === 0) {
@@ -453,7 +462,7 @@ async function syncBookingsToBilling() {
 // 6) Despacho -> Combustible (consumo real de un vuelo cerrado)
 // ----------------------------------------------------------------------------
 async function syncFuelFromDispatch() {
-  console.log("== 6/7 Despacho -> Combustible (consumo real por vuelo) ==");
+  console.log("== 6/8 Despacho -> Combustible (consumo real por vuelo) ==");
   await ensureAuth();
   const pending = await getJSON(`${DISPATCH_URL}/dispatch/pending-fuel-sync`);
   if (pending.length === 0) {
@@ -511,7 +520,7 @@ async function syncFuelFromDispatch() {
 // 7) Tripulación -> SMS (fatiga real disponible para el FRAT)
 // ----------------------------------------------------------------------------
 async function syncFatigueToSms() {
-  console.log("== 7/7 Tripulación -> SMS (fatiga real para FRAT) ==");
+  console.log("== 7/8 Tripulación -> SMS (fatiga real para FRAT) ==");
   await ensureAuth();
   const crew = await getJSON(`${CREW_URL}/crew`);
   const pilots = crew.filter((c) => c.role === "pilot" && c.employee_code);
@@ -550,6 +559,95 @@ async function syncFatigueToSms() {
 }
 
 // ----------------------------------------------------------------------------
+// 8) Bitácora de vuelo -> Mantenimiento (horas reales + novedades técnicas)
+//
+// El cierre del ciclo del tech log, como lo hacen AMOSeTL o TRAX en las
+// aerolíneas: cada bitácora que el piloto carga después de volar (a) suma
+// sus horas de vuelo REALES a la aeronave y a todos sus componentes
+// instalados en Mantenimiento, y (b) si el piloto reportó novedades
+// técnicas (squawks), abre automáticamente una orden de trabajo para que
+// Mantenimiento la vea sin que nadie transcriba nada.
+// ----------------------------------------------------------------------------
+async function syncFlightLogsToMaintenance() {
+  console.log("== 8/8 Bitácora -> Mantenimiento (horas reales + novedades) ==");
+  await ensureAuth();
+  const pending = await getJSON(`${DISPATCH_URL}/flight-logs/pending-maintenance-sync`);
+  if (pending.length === 0) {
+    console.log("No hay bitácoras pendientes de reflejar en Mantenimiento.\n");
+    return { synced: 0, skipped: 0 };
+  }
+
+  // Mapa matrícula -> id de aeronave en Mantenimiento (los ids son locales
+  // a cada módulo; la clave de negocio compartida es la matrícula).
+  const aircraft = await getJSON(`${MAINTENANCE_URL}/aircraft`);
+  const byTail = new Map(aircraft.map((a) => [a.tail_number, a]));
+
+  let synced = 0;
+  let skipped = 0;
+
+  for (const log of pending) {
+    const ac = byTail.get(log.tail_number);
+    if (!ac) {
+      console.log(`  ⚠ Bitácora #${log.id} (${log.tail_number}): la matrícula no existe en Mantenimiento. Correr primero el flujo 1 (maestro). Se omite.`);
+      skipped++;
+      continue;
+    }
+    if (log.flight_hours == null || log.flight_hours <= 0) {
+      console.log(`  ⚠ Bitácora #${log.id} (${log.tail_number}): sin horas de vuelo válidas (${log.flight_hours}). Se omite.`);
+      skipped++;
+      continue;
+    }
+    try {
+      const flight = await getJSON(`${MAINTENANCE_URL}/flights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aircraftId: ac.id,
+          flightDate: log.flight_date,
+          hobbsHours: log.flight_hours,
+          cycles: 1,
+          // actualFlight: el vuelo YA OCURRIÓ — se registra siempre, aun si
+          // deja un componente excedido (la excedencia queda como overdue y
+          // el flujo 2 saca la aeronave de Programación).
+          actualFlight: true,
+          notes: `Bitácora #${log.id} (piloto ${log.pilot_employee_code || "s/d"}) — ruta: ${log.route_flown || "s/d"}`,
+        }),
+      });
+      if (flight.limitWarnings) {
+        for (const w of flight.limitWarnings) {
+          console.log(`  ‼ LÍMITE EXCEDIDO tras registrar horas reales — ${w}`);
+        }
+      }
+
+      let workOrderMsg = "";
+      const remarks = (log.technical_remarks || "").trim();
+      if (remarks && remarks.toLowerCase() !== "sin novedades") {
+        const wo = await getJSON(`${MAINTENANCE_URL}/work-orders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            aircraftId: ac.id,
+            description: `Reporte del piloto (bitácora #${log.id}, ${log.flight_date}): ${remarks}`,
+            actionType: "inspection",
+          }),
+        });
+        workOrderMsg = ` + OT #${wo.id} abierta por novedad técnica`;
+      }
+
+      await getJSON(`${DISPATCH_URL}/flight-logs/${log.id}/mark-maintenance-synced`, { method: "POST" });
+      console.log(`  ✔ Bitácora #${log.id} (${log.tail_number}): +${log.flight_hours}h reflejadas en aeronave y componentes${workOrderMsg}.`);
+      synced++;
+    } catch (err) {
+      console.log(`  ⚠ Bitácora #${log.id} (${log.tail_number}): ${err.message}`);
+      skipped++;
+    }
+  }
+
+  console.log(`Bitácoras sincronizadas con Mantenimiento: ${synced} procesada(s), ${skipped} omitida(s).\n`);
+  return { synced, skipped };
+}
+
+// ----------------------------------------------------------------------------
 async function syncAll() {
   const masterData = await syncMasterData();
   const airworthiness = await syncAirworthiness();
@@ -558,7 +656,8 @@ async function syncAll() {
   const bookings = await syncBookingsToBilling();
   const fuel = await syncFuelFromDispatch();
   const fatigue = await syncFatigueToSms();
-  return { masterData, airworthiness, inventoryAlerts, trainingQualifications, bookings, fuel, fatigue };
+  const flightLogs = await syncFlightLogsToMaintenance();
+  return { masterData, airworthiness, inventoryAlerts, trainingQualifications, bookings, fuel, fatigue, flightLogs };
 }
 
 // Compatibilidad con el nombre usado por versiones anteriores del proyecto.
@@ -577,6 +676,7 @@ if (require.main === module) {
     : only === "bookings" ? syncBookingsToBilling
     : only === "fuel" ? syncFuelFromDispatch
     : only === "fatigue" ? syncFatigueToSms
+    : only === "flight-logs" ? syncFlightLogsToMaintenance
     : syncAll;
 
   run().catch((err) => {
@@ -594,5 +694,6 @@ module.exports = {
   syncBookingsToBilling,
   syncFuelFromDispatch,
   syncFatigueToSms,
+  syncFlightLogsToMaintenance,
   syncOnce,
 };

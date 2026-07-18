@@ -1,6 +1,6 @@
 # Capa de integración
 
-`sync.js` conecta los once módulos vía sus APIs REST, en siete flujos que
+`sync.js` conecta los once módulos vía sus APIs REST, en ocho flujos que
 se corren en orden porque cada uno depende del anterior:
 
 1. **`syncMasterData()`** — Maestro (`fleet-core-module`) → Facturación,
@@ -42,8 +42,19 @@ se corren en orden porque cada uno depende del anterior:
    `pilotEmployeeCode` y NO se pasa `fatigueScore` explícito, lo hereda de
    ahí automáticamente (`fatigue_source: 'tripulacion'` en el registro
    resultante, en vez de `'manual'`).
+8. **`syncFlightLogsToMaintenance()`** — Bitácora (`fleet-dispatch-module`)
+   → Mantenimiento. El cierre del ciclo del tech log, como AMOSeTL o TRAX
+   en las aerolíneas: (a) las horas de vuelo REALES de cada bitácora que
+   el piloto carga post-vuelo se suman a la aeronave y a todos sus
+   componentes instalados (`POST /flights` con `actualFlight: true` — un
+   vuelo ya volado se registra SIEMPRE, aun si deja un componente
+   excedido: la excedencia se avisa fuerte en el log y el flujo 2 saca la
+   aeronave de Programación); y (b) si el piloto reportó novedades
+   técnicas (squawks), se abre automáticamente una orden de trabajo de
+   inspección con su texto literal. Idempotente por
+   `synced_to_maintenance`.
 
-Correr `node sync.js` sin argumentos ejecuta los siete, en ese orden.
+Correr `node sync.js` sin argumentos ejecuta los ocho, en ese orden.
 
 ## Autenticación
 
