@@ -279,7 +279,7 @@ services:
   - type: cron
     name: fleet-sync-job
     runtime: node
-    plan: free
+    plan: starter
     rootDir: fleet-integration
     schedule: "*/15 * * * *"
     buildCommand: "true"
