@@ -13,6 +13,9 @@ const {
   getDispatchDashboard,
   getPendingFuelSync,
   markFuelSynced,
+  createFlightLog,
+  getFlightLogWithDetails,
+  listFlightLogs,
 } = require("./dispatchEngine");
 
 const PORT = process.env.PORT || 3009;
@@ -161,6 +164,42 @@ async function start() {
       pattern: /^\/dispatch\/(\d+)\/mark-fuel-synced$/,
       roles: ["admin", "integration"],
       handler: async (req, url, match) => ({ status: 200, body: await markFuelSynced(db, Number(match[1])) }),
+    },
+
+    // Bitácora de vuelo (post-vuelo) — a pedido del operador (julio 2026).
+    {
+      method: "GET",
+      pattern: /^\/flight-logs$/,
+      roles: null,
+      handler: async (req, url) => {
+        const tailNumber = url.searchParams.get("tailNumber") || undefined;
+        const date = url.searchParams.get("date") || undefined;
+        return { status: 200, body: await listFlightLogs(db, { tailNumber, date }) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/flight-logs\/(\d+)$/,
+      roles: null,
+      handler: async (req, url, match) => {
+        const log = await getFlightLogWithDetails(db, Number(match[1]));
+        if (!log) return { status: 404, body: { error: "Bitácora no encontrada." } };
+        return { status: 200, body: log };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/flight-logs$/,
+      roles: ["admin", "ops"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          const created = await createFlightLog(db, body);
+          return { status: 201, body: created };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
     },
   ];
 

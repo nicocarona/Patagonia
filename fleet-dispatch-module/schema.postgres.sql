@@ -50,3 +50,32 @@ CREATE TABLE IF NOT EXISTS fuel_plans (
 
 CREATE INDEX IF NOT EXISTS idx_flight_releases_status ON flight_releases(status);
 CREATE INDEX IF NOT EXISTS idx_flight_releases_tail_date ON flight_releases(tail_number, flight_date);
+
+CREATE TABLE IF NOT EXISTS flight_logs (
+  id                      SERIAL PRIMARY KEY,
+  flight_release_id       INTEGER REFERENCES flight_releases(id),
+  tail_number             TEXT NOT NULL,
+  pilot_employee_code     TEXT,
+  flight_date             TEXT NOT NULL,
+  actual_departure_time   TEXT NOT NULL,
+  actual_arrival_time     TEXT NOT NULL,
+  psv_start_time          TEXT,
+  psv_end_time            TEXT,
+  route_flown             TEXT,
+  fuel_location            TEXT,
+  fuel_liters              REAL,
+  wb_screenshot_base64     TEXT,
+  fpl_screenshot_base64    TEXT,
+  pax_manifest_base64      TEXT,
+  created_at               TEXT NOT NULL DEFAULT NOW()::TEXT
+);
+
+CREATE TABLE IF NOT EXISTS oil_additions (
+  id               SERIAL PRIMARY KEY,
+  flight_log_id    INTEGER NOT NULL REFERENCES flight_logs(id),
+  component        TEXT NOT NULL CHECK (component IN ('motor','xmsn','cola')),
+  quantity         REAL NOT NULL,
+  unit             TEXT NOT NULL DEFAULT 'L'
+);
+
+CREATE INDEX IF NOT EXISTS idx_flight_logs_tail_date ON flight_logs(tail_number, flight_date);

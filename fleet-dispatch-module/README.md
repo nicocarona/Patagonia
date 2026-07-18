@@ -90,6 +90,52 @@ el resto del sistema). Lectura (`GET`) abierta a cualquier rol autenticado.
 | POST | `/dispatch/:id/cancel` | admin, ops | cancela (no permitido si ya `departed`/`closed`) |
 | GET | `/dispatch/pending-fuel-sync` | cualquiera | despachos `closed` cuyo consumo aún no se registró en Combustible (usado por el flujo 6) |
 | POST | `/dispatch/:id/mark-fuel-synced` | admin, integration | marca un despacho como ya sincronizado con Combustible |
+| GET | `/flight-logs?tailNumber=&date=` | cualquiera | listar bitácoras de vuelo (post-vuelo) |
+| GET | `/flight-logs/:id` | cualquiera | detalle de una bitácora, con sus cargas de aceite |
+| POST | `/flight-logs` | admin, ops | registrar la bitácora de un vuelo ya realizado |
+
+## Bitácora de vuelo (post-vuelo) — a pedido del operador, julio 2026
+
+A diferencia del despacho (`/dispatch`, que se arma ANTES de volar), la
+bitácora (`/flight-logs`) es lo que el piloto carga DESPUÉS: horario real de
+despegue/aterrizaje, PSV (Período de Servicio de Vuelo — por defecto 1h
+antes del despegue y 30min después del aterrizaje, calculado automáticamente
+pero editable si se pasa `psvStartTime`/`psvEndTime` explícito), ruta
+realmente volada, dónde y cuántos litros de combustible se cargaron, aceite
+agregado por componente (`motor`, `xmsn`, `cola`, cada uno con su cantidad),
+y tres archivos de respaldo para fiscalización DGAC: captura del peso y
+balance, del FPL, y del manifiesto de pasajeros — guardados como base64
+directo en la base de datos (columnas `wb_screenshot_base64`,
+`fpl_screenshot_base64`, `pax_manifest_base64`).
+
+**Importante — por qué en la base de datos y no en el disco del servidor:**
+en Render (y en la mayoría de plataformas con plan gratuito/starter), el
+disco de cada servicio NO es persistente — se borra en cada reinicio o
+redespliegue. Guardar los archivos directo en PostgreSQL evita perderlos sin
+agregar un servicio de almacenamiento nuevo (S3 o similar), aunque en un
+volumen alto de vuelos con archivos grandes esto no escala tan bien como un
+almacenamiento de objetos dedicado — aceptable para el volumen de un
+operador de helicópteros, a revisar si crece mucho.
+
+**Los 60/30 minutos de PSV son un valor de referencia, no una cifra DGAC
+verificada** — mismo criterio de transparencia que el resto del sistema
+(umbrales de FRAT, límites de descanso, densidad de combustible). Ajustalo
+si tu manual de operaciones define otro margen.
+
+### Ejemplo: registrar una bitácora de vuelo
+
+```bash
+curl -X POST http://localhost:3009/flight-logs -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
+  "tailNumber": "XA-HEL1", "pilotEmployeeCode": "EMP-0001", "flightDate": "2026-07-25",
+  "actualDepartureTime": "09:00", "actualArrivalTime": "10:30",
+  "routeFlown": "Base Norte - Campo Minero Sur - Base Norte",
+  "fuelLocation": "Base Norte", "fuelLiters": 350,
+  "oilAdditions": [{"component":"motor","quantity":0.5},{"component":"xmsn","quantity":0.2}],
+  "wbScreenshotBase64": "data:image/png;base64,...",
+  "fplScreenshotBase64": "data:image/png;base64,...",
+  "paxManifestBase64": "data:image/png;base64,..."
+}'
+```
 
 ### Ejemplo: crear y liberar un despacho
 

@@ -282,6 +282,86 @@ async function markFuelSynced(db, releaseId) {
   return getFlightReleaseWithDetails(db, releaseId);
 }
 
+// ============================================================================
+// Bitácora de vuelo (post-vuelo) — a pedido del operador (julio 2026): lo que
+// el piloto carga DESPUÉS de volar, distinto del despacho (que es ANTES).
+// PSV = Período de Servicio de Vuelo. Por defecto se calcula 1h antes del
+// despegue y 30min después del aterrizaje — son valores de referencia que
+// cada operador puede editar según su manual de operaciones, mismo criterio
+// de transparencia usado en el resto del sistema (no es una cifra DGAC
+// codificada a mano, es un punto de partida editable).
+// ============================================================================
+
+function addMinutesToTime(hhmm, minutesDelta) {
+  const [h, m] = hhmm.split(":").map(Number);
+  let total = h * 60 + m + minutesDelta;
+  total = ((total % 1440) + 1440) % 1440; // envuelve dentro del día, no cruza fecha
+  const outH = String(Math.floor(total / 60)).padStart(2, "0");
+  const outM = String(total % 60).padStart(2, "0");
+  return `${outH}:${outM}`;
+}
+
+async function createFlightLog(db, params) {
+  const required = ["tailNumber", "flightDate", "actualDepartureTime", "actualArrivalTime"];
+  for (const f of required) if (!params[f]) throw new Error(`Falta el campo requerido: ${f}`);
+
+  const psvStartTime = params.psvStartTime || addMinutesToTime(params.actualDepartureTime, -60);
+  const psvEndTime = params.psvEndTime || addMinutesToTime(params.actualArrivalTime, 30);
+
+  const result = await run(
+    db,
+    `INSERT INTO flight_logs (flight_release_id, tail_number, pilot_employee_code, flight_date, actual_departure_time, actual_arrival_time, psv_start_time, psv_end_time, route_flown, fuel_location, fuel_liters, wb_screenshot_base64, fpl_screenshot_base64, pax_manifest_base64)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      params.flightReleaseId ?? null,
+      params.tailNumber,
+      params.pilotEmployeeCode ?? null,
+      params.flightDate,
+      params.actualDepartureTime,
+      params.actualArrivalTime,
+      psvStartTime,
+      psvEndTime,
+      params.routeFlown ?? null,
+      params.fuelLocation ?? null,
+      params.fuelLiters ?? null,
+      params.wbScreenshotBase64 ?? null,
+      params.fplScreenshotBase64 ?? null,
+      params.paxManifestBase64 ?? null,
+    ]
+  );
+  const flightLogId = result.lastInsertRowid;
+
+  for (const oil of params.oilAdditions ?? []) {
+    if (!oil.component || oil.quantity === undefined) continue;
+    await run(
+      db,
+      `INSERT INTO oil_additions (flight_log_id, component, quantity, unit) VALUES (?, ?, ?, ?)`,
+      [flightLogId, oil.component, oil.quantity, oil.unit ?? "L"]
+    );
+  }
+
+  return getFlightLogWithDetails(db, flightLogId);
+}
+
+async function getFlightLogWithDetails(db, flightLogId) {
+  const log = await get(db, "SELECT * FROM flight_logs WHERE id = ?", [flightLogId]);
+  if (!log) return null;
+  const oilAdditions = await all(db, "SELECT * FROM oil_additions WHERE flight_log_id = ?", [flightLogId]);
+  return { ...log, oilAdditions };
+}
+
+async function listFlightLogs(db, { tailNumber, date } = {}) {
+  let query = "SELECT * FROM flight_logs WHERE 1=1";
+  const args = [];
+  if (tailNumber) { query += " AND tail_number = ?"; args.push(tailNumber); }
+  if (date) { query += " AND flight_date = ?"; args.push(date); }
+  query += " ORDER BY flight_date DESC, actual_departure_time DESC";
+  const logs = await all(db, query, args);
+  const result = [];
+  for (const l of logs) result.push(await getFlightLogWithDetails(db, l.id));
+  return result;
+}
+
 module.exports = {
   computeWeightBalance,
   computeFuelPlan,
@@ -295,4 +375,8 @@ module.exports = {
   getDispatchDashboard,
   getPendingFuelSync,
   markFuelSynced,
+  addMinutesToTime,
+  createFlightLog,
+  getFlightLogWithDetails,
+  listFlightLogs,
 };

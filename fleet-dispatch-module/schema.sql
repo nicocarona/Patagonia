@@ -71,3 +71,43 @@ CREATE TABLE IF NOT EXISTS fuel_plans (
 
 CREATE INDEX IF NOT EXISTS idx_flight_releases_status ON flight_releases(status);
 CREATE INDEX IF NOT EXISTS idx_flight_releases_tail_date ON flight_releases(tail_number, flight_date);
+
+-- ============================================================================
+-- Bitácora de vuelo (flight_logs) — lo que el piloto carga DESPUÉS del vuelo,
+-- a pedido del operador: horarios reales, PSV (período de servicio de vuelo,
+-- por defecto 1h antes del despegue y 30min después del aterrizaje, editable
+-- si el operador lo ajusta distinto), ruta realmente volada, combustible y
+-- aceite cargados, y tres archivos de respaldo para fiscalización DGAC
+-- (captura del W&B, del FPL y del manifiesto de pasajeros), guardados como
+-- base64 directo en la base de datos — no en el disco del servidor, que en
+-- Render no es persistente entre reinicios (ver README).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS flight_logs (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  flight_release_id       INTEGER REFERENCES flight_releases(id), -- opcional: enlaza con el despacho de origen
+  tail_number             TEXT NOT NULL,
+  pilot_employee_code     TEXT,
+  flight_date             TEXT NOT NULL,
+  actual_departure_time   TEXT NOT NULL,   -- HH:MM
+  actual_arrival_time     TEXT NOT NULL,   -- HH:MM
+  psv_start_time          TEXT,            -- HH:MM, por defecto departure -1h
+  psv_end_time            TEXT,            -- HH:MM, por defecto arrival +30min
+  route_flown             TEXT,
+  fuel_location            TEXT,           -- dónde se cargó combustible
+  fuel_liters              REAL,
+  wb_screenshot_base64     TEXT,           -- captura del peso y balance (generada por la app o subida)
+  fpl_screenshot_base64    TEXT,           -- captura del FPL DGAC
+  pax_manifest_base64      TEXT,           -- captura del manifiesto de pasajeros
+  created_at               TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS oil_additions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  flight_log_id    INTEGER NOT NULL REFERENCES flight_logs(id),
+  component        TEXT NOT NULL CHECK (component IN ('motor','xmsn','cola')),
+  quantity         REAL NOT NULL,
+  unit             TEXT NOT NULL DEFAULT 'L'
+);
+
+CREATE INDEX IF NOT EXISTS idx_flight_logs_tail_date ON flight_logs(tail_number, flight_date);
