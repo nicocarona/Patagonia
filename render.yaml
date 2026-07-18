@@ -13,7 +13,10 @@
 #
 # AUTH_SECRET se define UNA vez en el grupo `fleet-shared` de abajo
 # (`generateValue: true` — Render genera un valor aleatorio al crear el
-# blueprint) y los demás servicios lo heredan vía `envVarGroups`. Es lo que
+# blueprint) y los demás servicios lo heredan vía `fromGroup` dentro de su
+# lista `envVars` (sintaxis vigente del Blueprint spec de Render — la
+# versión anterior de este archivo usaba `envVarGroups` a nivel de
+# servicio, que Render ya no acepta ahí). Es lo que
 # permite que un token emitido por fleet-auth-api se verifique en los otros
 # diez. No lo cambies módulo por módulo — si un solo servicio queda con un
 # AUTH_SECRET distinto, los tokens dejan de validar ahí.
@@ -93,9 +96,8 @@ services:
     rootDir: fleet-auth-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-auth-db
@@ -110,9 +112,8 @@ services:
     rootDir: fleet-core-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-core-db
@@ -127,9 +128,8 @@ services:
     rootDir: fleet-billing-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-billing-db
@@ -144,9 +144,8 @@ services:
     rootDir: fleet-scheduling-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-scheduling-db
@@ -161,9 +160,8 @@ services:
     rootDir: fleet-crew-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-crew-db
@@ -178,9 +176,8 @@ services:
     rootDir: fleet-sms-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-sms-db
@@ -195,9 +192,8 @@ services:
     rootDir: fleet-maintenance-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-maintenance-db
@@ -212,9 +208,8 @@ services:
     rootDir: fleet-inventory-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-inventory-db
@@ -229,9 +224,8 @@ services:
     rootDir: fleet-dispatch-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-dispatch-db
@@ -246,9 +240,8 @@ services:
     rootDir: fleet-training-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-training-db
@@ -263,9 +256,8 @@ services:
     rootDir: fleet-fuel-module
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - fleet-shared
     envVars:
+      - fromGroup: fleet-shared
       - key: DATABASE_URL
         fromDatabase:
           name: fleet-fuel-db
