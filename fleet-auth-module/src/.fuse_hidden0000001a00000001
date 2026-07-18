@@ -27,7 +27,7 @@ const { requireAuth } = require("./auth");
 const PORT = process.env.PORT || 3007;
 
 function sendJSON(res, status, body) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" });
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body, null, 2));
 }
 function readBody(req) {
@@ -94,10 +94,6 @@ async function main() {
   ];
 
   const server = http.createServer(async (req, res) => {
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" });
-      return res.end();
-    }
     const url = new URL(req.url, `http://${req.headers.host}`);
     const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
     if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });

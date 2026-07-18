@@ -3,16 +3,18 @@ const { openDatabase } = require("./db");
 const { seed } = require("./seed");
 const { requireAuth } = require("./auth");
 const {
-  createSupplier,
-  ensureTank,
-  recordDelivery,
-  recordUplift,
-  getFuelDashboard,
-  getCostByAircraft,
-  getSuppliers,
-} = require("./fuelEngine");
+  upsertCrewMember,
+  addLicense,
+  addMedicalCertificate,
+  upsertTypeRating,
+  addSpecialQualification,
+  addRecurrentTraining,
+  getCrewCurrencyProfile,
+  getFleetCurrencyDashboard,
+  checkPilotCurrency,
+} = require("./trainingEngine");
 
-const PORT = process.env.PORT || 3011;
+const PORT = process.env.PORT || 3010;
 const DB_FILE = process.env.DATABASE_URL ? undefined : process.env.SQLITE_FILE || ":memory:";
 
 function sendJSON(res, status, body) {
@@ -41,24 +43,51 @@ async function start() {
   if (process.env.SEED === "1") await seed(db);
 
   const routes = [
-    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, module: "fleet-fuel-module" } }) },
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, module: "fleet-training-module" } }) },
 
-    { method: "GET", pattern: /^\/dashboard$/, roles: null, handler: async () => ({ status: 200, body: await getFuelDashboard(db) }) },
     {
       method: "GET",
-      pattern: /^\/cost-by-aircraft$/,
+      pattern: /^\/currency$/,
       roles: null,
-      handler: async (req, url) => ({ status: 200, body: await getCostByAircraft(db, { since: url.searchParams.get("since") || undefined }) }),
+      handler: async () => ({ status: 200, body: await getFleetCurrencyDashboard(db) }),
     },
-    { method: "GET", pattern: /^\/suppliers$/, roles: null, handler: async () => ({ status: 200, body: await getSuppliers(db) }) },
+    {
+      method: "GET",
+      pattern: /^\/currency\/([^/]+)$/,
+      roles: null,
+      handler: async (req, url, match) => {
+        const profile = await getCrewCurrencyProfile(db, match[1]);
+        if (!profile) return { status: 404, body: { error: "Tripulante no encontrado." } };
+        return { status: 200, body: profile };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/currency\/([^/]+)\/([^/]+)$/,
+      roles: null,
+      handler: async (req, url, match) => {
+        const result = await checkPilotCurrency(db, { employeeCode: match[1], aircraftModel: decodeURIComponent(match[2]) });
+        return { status: 200, body: result };
+      },
+    },
+
     {
       method: "POST",
-      pattern: /^\/suppliers$/,
-      roles: ["admin", "finance"],
+      pattern: /^\/crew$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        return { status: 201, body: await upsertCrewMember(db, body) };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/licenses$/,
+      roles: ["admin", "crew"],
       handler: async (req) => {
         const body = await readBody(req);
         try {
-          return { status: 201, body: await createSupplier(db, body) };
+          return { status: 201, body: await addLicense(db, body) };
         } catch (err) {
           return { status: 400, body: { error: err.message } };
         }
@@ -66,12 +95,12 @@ async function start() {
     },
     {
       method: "POST",
-      pattern: /^\/tanks$/,
-      roles: ["admin", "finance", "integration"],
+      pattern: /^\/medical-certificates$/,
+      roles: ["admin", "crew"],
       handler: async (req) => {
         const body = await readBody(req);
         try {
-          return { status: 201, body: await ensureTank(db, body) };
+          return { status: 201, body: await addMedicalCertificate(db, body) };
         } catch (err) {
           return { status: 400, body: { error: err.message } };
         }
@@ -79,39 +108,46 @@ async function start() {
     },
     {
       method: "POST",
-      pattern: /^\/deliveries$/,
-      roles: ["admin", "finance"],
+      pattern: /^\/type-ratings$/,
+      roles: ["admin", "crew"],
       handler: async (req) => {
         const body = await readBody(req);
         try {
-          return { status: 201, body: await recordDelivery(db, body) };
+          return { status: 201, body: await upsertTypeRating(db, body) };
         } catch (err) {
           return { status: 400, body: { error: err.message } };
         }
       },
     },
     {
-      // También usado por fleet-integration (rol 'integration') para
-      // registrar el consumo real de un vuelo cerrado en fleet-dispatch-module.
       method: "POST",
-      pattern: /^\/uplifts$/,
-      roles: ["admin", "ops", "integration"],
+      pattern: /^\/special-qualifications$/,
+      roles: ["admin", "crew"],
       handler: async (req) => {
         const body = await readBody(req);
         try {
-          return { status: 201, body: await recordUplift(db, body) };
+          return { status: 201, body: await addSpecialQualification(db, body) };
         } catch (err) {
-          return { status: 409, body: { error: err.message } };
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/recurrent-trainings$/,
+      roles: ["admin", "crew"],
+      handler: async (req) => {
+        const body = await readBody(req);
+        try {
+          return { status: 201, body: await addRecurrentTraining(db, body) };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
         }
       },
     },
   ];
 
   const server = http.createServer(async (req, res) => {
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" });
-      return res.end();
-    }
     const url = new URL(req.url, `http://${req.headers.host}`);
     const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
     if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
@@ -132,11 +168,11 @@ async function start() {
   });
 
   server.listen(PORT, () => {
-    console.log(`fleet-fuel-module escuchando en http://localhost:${PORT} (motor: ${db.engine})`);
+    console.log(`fleet-training-module escuchando en http://localhost:${PORT} (motor: ${db.engine})`);
   });
 }
 
 start().catch((err) => {
-  console.error("Error al iniciar fleet-fuel-module:", err);
+  console.error("Error al iniciar fleet-training-module:", err);
   process.exit(1);
 });

@@ -1,16 +1,21 @@
 // ============================================================================
-// API HTTP del módulo de Tripulación y Fatiga (node:http, sin dependencias)
+// API HTTP del módulo de programación de vuelos (node:http, sin dependencias)
+//
+// Funciona igual con SQLite o PostgreSQL — el motor se elige solo, según si
+// DATABASE_URL está definido (ver db.js).
 //
 // Endpoints:
+//   GET    /aircraft
 //   GET    /crew
 //   GET    /crew/:id/qualifications
 //   POST   /crew/:id/qualifications
-//   GET    /crew/:id/fatigue-score?date=
-//   GET    /duty-periods?crewId=&date=
-//   POST   /duty-periods
-//   POST   /duty-periods/validate
-//   GET    /leave-requests?crewId=
-//   POST   /leave-requests
+//   GET    /bookings?aircraftId=&pilotId=&date=
+//   POST   /bookings
+//   POST   /bookings/validate
+//   POST   /bookings/:id/cancel
+//   POST   /bookings/:id/close
+//   GET    /bookings/pending-sync
+//   POST   /bookings/:id/mark-synced
 //
 // Uso local (SQLite):        node src/server.js
 // Uso con SEED:               SEED=1 node src/server.js
@@ -20,10 +25,13 @@
 const http = require("node:http");
 const { URL } = require("node:url");
 const { openDatabase, all, get, run } = require("./db");
-const { createDutyPeriod, validateDutyPeriod, computeFatigueScore, upsertCrewMember } = require("./fatigueEngine");
+const {
+  createBooking, validateBooking, cancelBooking, closeBooking, markBookingSynced, getPendingSync,
+  setAircraftAirworthy, upsertAircraft, upsertCrewMember,
+} = require("./schedulingEngine");
 const { requireAuth } = require("./auth");
 
-const PORT = process.env.PORT || 3003;
+const PORT = process.env.PORT || 3002;
 
 function sendJSON(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" });
@@ -45,7 +53,10 @@ async function main() {
   const db = await openDatabase(process.env.DB_FILE || ":memory:");
 
   if (process.env.SEED === "1") {
-    const existing = await get(db, "SELECT COUNT(*) as n FROM crew_members");
+    // Misma guarda de seguridad que el módulo de facturación: si ya hay
+    // aeronaves cargadas, no vuelve a sembrar (evita duplicados al
+    // reiniciar en una base Postgres persistente).
+    const existing = await get(db, "SELECT COUNT(*) as n FROM aircraft");
     if (Number(existing?.n ?? 0) > 0) {
       console.log("SEED=1 definido, pero ya hay datos cargados — se omite la siembra para no duplicar.");
     } else {
@@ -56,7 +67,31 @@ async function main() {
   }
 
   const routes = [
-    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-crew-module" } }) },
+    { method: "GET", pattern: /^\/health$/, auth: false, handler: async () => ({ status: 200, body: { ok: true, service: "fleet-scheduling-module" } }) },
+    { method: "GET", pattern: /^\/aircraft$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM aircraft") }) },
+    {
+      // Usado por fleet-integration para sembrar/actualizar el maestro de
+      // aeronaves (fleet-core-module) dentro de este módulo.
+      method: "POST",
+      pattern: /^\/aircraft$/,
+      roles: ["admin", "integration"],
+      handler: async (req) => {
+        const b = await readBody(req);
+        if (!b.tailNumber || !b.model) return { status: 400, body: { error: "Se requiere tailNumber y model" } };
+        return { status: 200, body: await upsertAircraft(db, b) };
+      },
+    },
+    {
+      // Usado por fleet-integration para reflejar el estado de
+      // aeronavegabilidad calculado por fleet-maintenance-module.
+      method: "POST",
+      pattern: /^\/aircraft\/(\d+)\/airworthy$/,
+      roles: ["admin", "integration"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        return { status: 200, body: await setAircraftAirworthy(db, Number(m[1]), !!b.airworthy) };
+      },
+    },
     { method: "GET", pattern: /^\/crew$/, handler: async () => ({ status: 200, body: await all(db, "SELECT * FROM crew_members") }) },
     {
       // Usado por fleet-integration para sembrar/actualizar el maestro de
@@ -76,9 +111,12 @@ async function main() {
       handler: async (req, url, m) => ({ status: 200, body: await all(db, "SELECT * FROM crew_qualifications WHERE crew_id = ?", [m[1]]) }),
     },
     {
+      // También usado por fleet-integration (rol 'integration') para
+      // reflejar las habilitaciones de tipo vigentes calculadas por
+      // fleet-training-module — ver flujo 4/5 en fleet-integration/sync.js.
       method: "POST",
       pattern: /^\/crew\/(\d+)\/qualifications$/,
-      roles: ["admin", "crew"],
+      roles: ["admin", "ops", "crew", "integration"],
       handler: async (req, url, m) => {
         const b = await readBody(req);
         if (!b.aircraft_model || !b.valid_until) return { status: 400, body: { error: "Se requiere aircraft_model y valid_until" } };
@@ -92,43 +130,65 @@ async function main() {
     },
     {
       method: "GET",
-      pattern: /^\/crew\/(\d+)\/fatigue-score$/,
-      handler: async (req, url, m) => {
-        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
-        return { status: 200, body: await computeFatigueScore(db, Number(m[1]), date) };
-      },
-    },
-    {
-      method: "GET",
-      pattern: /^\/duty-periods$/,
+      pattern: /^\/bookings$/,
       handler: async (req, url) => {
-        const conditions = [];
+        const conditions = ["status = 'confirmed'"];
         const params = [];
-        if (url.searchParams.get("crewId")) { conditions.push("crew_id = ?"); params.push(url.searchParams.get("crewId")); }
-        if (url.searchParams.get("date")) { conditions.push("duty_date = ?"); params.push(url.searchParams.get("date")); }
-        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-        return { status: 200, body: await all(db, `SELECT * FROM duty_periods ${where} ORDER BY duty_date, start_time`, params) };
+        if (url.searchParams.get("aircraftId")) { conditions.push("aircraft_id = ?"); params.push(url.searchParams.get("aircraftId")); }
+        if (url.searchParams.get("pilotId")) { conditions.push("pilot_id = ?"); params.push(url.searchParams.get("pilotId")); }
+        if (url.searchParams.get("date")) { conditions.push("booking_date = ?"); params.push(url.searchParams.get("date")); }
+        return { status: 200, body: await all(db, `SELECT * FROM bookings WHERE ${conditions.join(" AND ")} ORDER BY booking_date, start_time`, params) };
       },
     },
     {
       method: "POST",
-      pattern: /^\/duty-periods\/validate$/,
-      roles: ["admin", "crew", "ops"],
+      pattern: /^\/bookings\/validate$/,
+      roles: ["admin", "ops"],
       handler: async (req) => {
         const b = await readBody(req);
-        return { status: 200, body: await validateDutyPeriod(db, b) };
+        const result = await validateBooking(db, {
+          aircraftId: b.aircraftId, pilotId: b.pilotId, bookingDate: b.bookingDate,
+          startTime: b.startTime, endTime: b.endTime, maxDailyDutyHours: b.maxDailyDutyHours,
+        });
+        return { status: 200, body: result };
       },
     },
     {
       method: "POST",
-      pattern: /^\/duty-periods$/,
-      roles: ["admin", "crew", "ops"],
+      pattern: /^\/bookings$/,
+      roles: ["admin", "ops"],
       handler: async (req) => {
         const b = await readBody(req);
-        const required = ["crewId", "dutyDate", "startTime", "endTime"];
+        const required = ["aircraftId", "pilotId", "bookingDate", "startTime", "endTime"];
         for (const f of required) if (b[f] === undefined) return { status: 400, body: { error: `Falta el campo requerido: ${f}` } };
         try {
-          return { status: 201, body: await createDutyPeriod(db, b) };
+          const booking = await createBooking(db, b);
+          return { status: 201, body: booking };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings\/(\d+)\/cancel$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, m) => {
+        try {
+          return { status: 200, body: await cancelBooking(db, Number(m[1])) };
+        } catch (err) {
+          return { status: 404, body: { error: err.message } };
+        }
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/bookings\/(\d+)\/close$/,
+      roles: ["admin", "ops"],
+      handler: async (req, url, m) => {
+        const b = await readBody(req);
+        try {
+          return { status: 200, body: await closeBooking(db, Number(m[1]), b) };
         } catch (err) {
           return { status: 400, body: { error: err.message } };
         }
@@ -136,36 +196,18 @@ async function main() {
     },
     {
       method: "GET",
-      pattern: /^\/leave-requests$/,
-      handler: async (req, url) => {
-        const crewId = url.searchParams.get("crewId");
-        const sql = crewId ? "SELECT * FROM leave_requests WHERE crew_id = ?" : "SELECT * FROM leave_requests";
-        return { status: 200, body: await all(db, sql, crewId ? [crewId] : []) };
-      },
+      pattern: /^\/bookings\/pending-sync$/,
+      handler: async () => ({ status: 200, body: await getPendingSync(db) }),
     },
     {
       method: "POST",
-      pattern: /^\/leave-requests$/,
-      roles: ["admin", "crew"],
-      handler: async (req) => {
-        const b = await readBody(req);
-        const required = ["crewId", "startDate", "endDate"];
-        for (const f of required) if (b[f] === undefined) return { status: 400, body: { error: `Falta el campo requerido: ${f}` } };
-        const result = await run(
-          db,
-          `INSERT INTO leave_requests (crew_id, start_date, end_date, leave_type, status) VALUES (?, ?, ?, ?, ?)`,
-          [b.crewId, b.startDate, b.endDate, b.leaveType ?? "vacation", b.status ?? "approved"]
-        );
-        return { status: 201, body: await get(db, "SELECT * FROM leave_requests WHERE id = ?", [result.lastInsertRowid]) };
-      },
+      pattern: /^\/bookings\/(\d+)\/mark-synced$/,
+      roles: ["admin", "integration"],
+      handler: async (req, url, m) => ({ status: 200, body: await markBookingSynced(db, Number(m[1])) }),
     },
   ];
 
   const server = http.createServer(async (req, res) => {
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" });
-      return res.end();
-    }
     const url = new URL(req.url, `http://${req.headers.host}`);
     const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
     if (!route) return sendJSON(res, 404, { error: "Ruta no encontrada" });
@@ -186,7 +228,7 @@ async function main() {
   });
 
   server.listen(PORT, () => {
-    console.log(`Módulo de Tripulación y Fatiga escuchando en http://localhost:${PORT}`);
+    console.log(`Módulo de programación escuchando en http://localhost:${PORT}`);
     console.log(`Motor de base de datos: ${db.engine}`);
   });
 }
